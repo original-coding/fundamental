@@ -198,9 +198,9 @@ class registration::bind<detail::ctor, Class_Type, acc_level, Visitor_List, Ctor
 
             // at the moment we only supported one policy
             using first_prop_policy = typename std::tuple_element<0, as_std_tuple_t<policy_list>>::type;
-            m_ctor = create_constructor_wrapper<first_prop_policy>(std::move(get_metadata(std::forward<Args>(args)...)),
-                                                                   std::move(get_default_args<type_list<Ctor_Args...>, constructor_type>(std::forward<Args>(args)...)),
-                                                                   std::move(create_param_infos<type_list<Ctor_Args...>, constructor_type>(std::forward<Args>(args)...)));
+            m_ctor = create_constructor_wrapper<first_prop_policy>(get_metadata(std::forward<Args>(args)...),
+                                                                   get_default_args<type_list<Ctor_Args...>, constructor_type>(std::forward<Args>(args)...),
+                                                                   create_param_infos<type_list<Ctor_Args...>, constructor_type>(std::forward<Args>(args)...));
             return registration::class_<Class_Type>(m_reg_exec);
         }
 

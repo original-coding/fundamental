@@ -65,7 +65,7 @@ TYPED_TEST(IntegerCodecTest, TestAllNumberType) {
         encode_v = 0;
         for (std::size_t shift = 0; shift < sizeof(ValueType) * 8 - 1; ++shift)
         {
-            encode_v += -1+std::pow(2,shift);
+            encode_v += (-1)*std::pow(2,shift);
             auto len           = VarintEncode(encode_v, src);
             ValueType decode_v = 0;
 
