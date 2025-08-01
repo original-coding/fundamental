@@ -3,8 +3,9 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <mutex>
 #include <memory>
+#include <mutex>
+#include <string>
 
 namespace Fundamental
 {
@@ -63,8 +64,8 @@ public:
             return !this->expired();
         }
     };
-    using HandleType                           = Handle_;
-    using TaskType                             = std::function<void()>;
+    using HandleType = Handle_;
+    using TaskType   = std::function<void()>;
 
 public:
     /*

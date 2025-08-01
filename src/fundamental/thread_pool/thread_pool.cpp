@@ -215,7 +215,7 @@ ThreadPool::Task ThreadPool::Dequeue(std::int64_t idle_wait_time_ms, bool& is_ti
     while (true) {
         if (!m_tasks.empty()) {
             if (m_tasks.top().time <= clock_t::now()) {
-                ThreadPool::Task task = std::move(m_tasks.top());
+                ThreadPool::Task task = m_tasks.top();
                 m_tasks.pop();
                 return task;
             }
