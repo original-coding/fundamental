@@ -87,6 +87,7 @@ struct ComplexSS : ComplexS {
 };
 
 struct CustomObject {
+    CustomObject() = default;
     std::vector<color> cs;
     std::vector<nlohmann::json> objects;
     std::list<int> is;
@@ -100,6 +101,7 @@ struct CustomObject {
 };
 
 struct CustomObject2 {
+    CustomObject2() = default;
     std::list<int> is;
     bool operator==(const CustomObject& other) const noexcept {
         return is == other.is;
@@ -110,6 +112,7 @@ struct CustomObject2 {
 };
 
 struct TestContainerEle {
+    TestContainerEle() = default;
     int x;
     int y;
     bool operator==(const TestContainerEle& other) const noexcept {
@@ -127,7 +130,9 @@ struct TestContainerEle {
 };
 
 struct TestContainer {
+    TestContainer() = default;
     TestContainerEle obj;
+
     std::vector<std::string> empty_v;
     std::vector<TestContainerEle> no_empty_v;
     std::vector<std::vector<TestContainerEle>> objects_v;
@@ -154,6 +159,7 @@ struct TestContainer {
 };
 
 struct TestVarObject {
+    TestVarObject()  = default;
     bool v1          = false;
     std::int8_t v2   = 1;
     std::uint8_t v3  = 2;
@@ -204,6 +210,7 @@ struct TestVarObject {
 };
 
 struct TestVarObject2 {
+    TestVarObject2() = default;
     TestVarObject ob1;
     std::vector<TestVarObject> obj2;
     std::set<TestVarObject> obj3;
@@ -215,6 +222,7 @@ struct TestVarObject2 {
 };
 
 struct TestExtraObject {
+    TestExtraObject() = default;
     std::vector<std::string> ss;
     std::vector<color> cc;
     std::set<std::string> sss;
@@ -731,8 +739,8 @@ void test_normal_packer() {
         obj.cc.emplace_back(color::blue);
         obj.sss.insert("456");
         obj.sss.insert("4567");
-        obj.mm.emplace("123","123");
-        obj.mm.emplace("1234","1233");
+        obj.mm.emplace("123", "123");
+        obj.mm.emplace("1234", "1233");
         auto data = Fundamental::io::to_json(obj);
         TestExtraObject tmp;
         [[maybe_unused]] auto ret = Fundamental::io::from_json(data, tmp);
@@ -772,7 +780,9 @@ void test_normal_packer() {
             auto type        = rttr::type::get(tmp.obj);
             rttr::variant v1 = tmp.obj.x;
             rttr::variant v2 = 123L;
-            v2.convert(v1.get_type());
+            bool convert_ret         = v2.convert(v1.get_type());
+            FASSERT(convert_ret, "convert from {} to {} failed", v2.get_type().get_name().data(),
+                    v1.get_type().get_name().data());
             type.set_property_value("x", tmp.obj, v2);
             FASSERT(tmp.obj.x == 123, "{}", tmp.obj.x);
             [[maybe_unused]] auto ret = Fundamental::io::from_json(data, tmp);

@@ -1,8 +1,10 @@
 #pragma once
 
 #ifndef __FUNDAMENTAL_PLATFORM__
-    #define __FUNDAMENTAL_PLATFORM__
+#define __FUNDAMENTAL_PLATFORM__
+#if defined(linux) || defined(__linux) || defined(__linux__)
     #include <endian.h>
+#endif
 
     #ifdef __cplusplus
         #include <cstdint>

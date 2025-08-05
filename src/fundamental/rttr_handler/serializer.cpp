@@ -5,8 +5,14 @@
 #include <vector>
 
 #include "serializer.h"
-
+#ifdef _MSC_VER
+    #pragma warning(push)
+    #pragma warning(disable : 26819 26437 26439 26495 26800 26498) // disable warning 4996
+#endif
 #include <rttr/registration>
+#ifdef _MSC_VER
+    #pragma warning(pop)
+#endif
 using namespace rttr;
 RTTR_REGISTRATION {
     using namespace rttr;

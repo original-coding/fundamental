@@ -1,11 +1,16 @@
 #pragma once
 #ifdef _MSC_VER
-    #pragma warning(disable : 4996) // disable warning 4996
+    #pragma warning(push)
+    #pragma warning(disable : 4996 26498 26495 26819 26800)
 #endif
 #include "spdlog/spdlog.h"
 #include <spdlog/fmt/ostr.h> //suport fmt custom types with  operator<<
 #ifdef _MSC_VER
-    #pragma warning(default : 4996) // enable warning 4996 back
+    #pragma warning(pop)
+#endif
+
+#if TARGET_PLATFORM_WINDOWS
+#include <string>
 #endif
 
 #include <algorithm>
@@ -205,8 +210,12 @@ template <std::size_t level, char SlashChar, bool with_discard_flag, std::size_t
 inline constexpr std::array<char, N> __get_short_file_name__(const char (&file_name)[N]) {
     static_assert(level > 0);
     std::array<char, N> short_name {};
-    if (N <= level) {
+    if constexpr (N <= level) {
+#if TARGET_PLATFORM_WINDOWS
+        std::memcpy(short_name.data(), file_name, N);
+#else
         __builtin_memcpy(short_name.data(), file_name, N);
+#endif
         return short_name;
     }
     std::size_t find_level = 0;
@@ -217,14 +226,27 @@ inline constexpr std::array<char, N> __get_short_file_name__(const char (&file_n
         }
     }
     if (find_level < level) {
+#if TARGET_PLATFORM_WINDOWS
+        std::memcpy(short_name.data(), file_name, N);
+#else
         __builtin_memcpy(short_name.data(), file_name, N);
+#endif
         return short_name;
     }
     std::size_t flag_bytes = with_discard_flag ? i : 0;
     if (flag_bytes > 3) flag_bytes = 3;
     std::size_t copy_size = std::min(N - i - 1, N - flag_bytes - 1); // -1 for null terminator
+#if TARGET_PLATFORM_WINDOWS
+    std::memset(short_name.data(), '.', flag_bytes);
+#else
     __builtin_memset(short_name.data(), '.', flag_bytes);
+#endif
+
+#if TARGET_PLATFORM_WINDOWS
+    std::memcpy(short_name.data() + flag_bytes, file_name + i + 1, copy_size);
+#else
     __builtin_memcpy(short_name.data() + flag_bytes, file_name + i + 1, copy_size);
+#endif
     short_name[flag_bytes + copy_size] = '\0';
     return short_name;
 }

@@ -33,18 +33,18 @@ private:
     //  +----+----------+----------+
     //  | 1 | 1 | 1 to 255 |
     //  +----+----------+----------+
-    // (1) The VER field is set to X’05’ for this version of the protocol
+    // (1) The VER field is set to X'05' for this version of the protocol
     // (2) The NMETHODS field contains the number of method identifier octets
     // that appear in the METHODS field
     void get_version_and_nmethods();
 
     // (3) The METHODS is supported method list
-    //      (3.1) X’00’ NO AUTHENTICATION REQUIRED
-    //      (3.2) X’01’ GSSAPI
-    //      (3.3) X’02’ USERNAME/PASSWORD
-    //      (3.4) X’03’ to X’7F’ IANA ASSIGNED
-    //      (3.5) X’80’ to X’FE’ RESERVED FOR PRIVATE METHODS
-    //      (3.6) X’FF’ NO ACCEPTABLE METHODS
+    //      (3.1) X'00' NO AUTHENTICATION REQUIRED
+    //      (3.2) X'01' GSSAPI
+    //      (3.3) X'02' USERNAME/PASSWORD
+    //      (3.4) X'03' to X'7F' IANA ASSIGNED
+    //      (3.5) X'80' to X'FE' RESERVED FOR PRIVATE METHODS
+    //      (3.6) X'FF' NO ACCEPTABLE METHODS
     void get_methods_list();
 
     std::string methods_toString();
@@ -86,27 +86,27 @@ private:
     //  +----+--------+
     //  | 1 | 1 |
     //  +----+--------+
-    // (1) VER protocol version: X’05’
+    // (1) VER protocol version: X'05'
     // (2) STATUS auth result
-    //      (2.1) SUCCESS X’00’
-    //      (2.2) FAILURE X’01’(STATUS value other than X’00’)
+    //      (2.1) SUCCESS X'00'
+    //      (2.2) FAILURE X'01'(STATUS value other than X'00')
     void do_auth_and_reply();
 
     //  +----+-----+-------+------+----------+----------+
     //  |VER | CMD | RSV | ATYP | DST.ADDR | DST.PORT   |
     //  +----+-----+-------+------+----------+----------+
-    //  | 1  | 1   | X’00’ | 1  | Variable |     2      |
+    //  | 1  | 1   | X'00' | 1  | Variable |     2      |
     //  +----+-----+-------+------+----------+----------+
-    // (1) VER protocol version: X’05’
+    // (1) VER protocol version: X'05'
     // (2) CMD
-    //      (2.1) CONNECT X’01’
-    //      (2.2) BIND X’02’
-    //      (2.3) UDP ASSOCIATE X’03’
+    //      (2.1) CONNECT X'01'
+    //      (2.2) BIND X'02'
+    //      (2.3) UDP ASSOCIATE X'03'
     // (3) RSV RESERVED
     // (4) ATYP address type of following address
-    //      (4.1) IP V4 address: X’01’
-    //      (4.2) DOMAINNAME: X’03’
-    //      (4.3) IP V6 address: X’04’
+    //      (4.1) IP V4 address: X'01'
+    //      (4.2) DOMAINNAME: X'03'
+    //      (4.3) IP V6 address: X'04'
     void get_request_from_client();
 
     // (5) DST.ADDR desired destination address
@@ -130,18 +130,18 @@ private:
     template <typename InternetProtocol>
     void set_reply_address(const asio::ip::basic_endpoint<InternetProtocol>& endpoint) {
         if (endpoint.address().is_v4()) {
-            this->reply_atyp = SocksV5::Socks5HostType::Ipv4;
-            this->bnd_addr.resize(4);
+            reply_atyp = SocksV5::Socks5HostType::Ipv4;
+            bnd_addr.resize(4);
             auto&& ipv4_array = endpoint.address().to_v4().to_bytes();
-            std::memcpy(this->bnd_addr.data(), ipv4_array.data(), 4);
+            std::memcpy(bnd_addr.data(), ipv4_array.data(), 4);
         } else {
-            this->reply_atyp = SocksV5::Socks5HostType::Ipv6;
-            this->bnd_addr.resize(16);
+            reply_atyp = SocksV5::Socks5HostType::Ipv6;
+            bnd_addr.resize(16);
             auto&& ipv6_array = endpoint.address().to_v6().to_bytes();
-            std::memcpy(this->bnd_addr.data(), ipv6_array.data(), 16);
+            std::memcpy(bnd_addr.data(), ipv6_array.data(), 16);
         }
 
-        this->bnd_port = htons(endpoint.port());
+        bnd_port = htons(endpoint.port());
     }
 
     void async_dns_reslove();
@@ -178,12 +178,12 @@ private:
     //  +----+------+------+----------+----------+----------+
     //  | 2 | 1 | 1 | Variable | 2 | Variable |
     //  +----+------+------+----------+----------+----------+
-    // (1) RSV Reserved X’0000’
+    // (1) RSV Reserved X'0000'
     // (2) FRAG Current fragment number
     // (3) ATYP address type of following address
-    //      (3.1) IP V4 address: X’01’
-    //      (3.2) DOMAINNAME: X’03’
-    //      (3.3) IP V6 address: X’04’
+    //      (3.1) IP V4 address: X'01'
+    //      (3.2) DOMAINNAME: X'03'
+    //      (3.3) IP V6 address: X'04'
     // (4) DST.ADDR desired destination address
     // (5) DST.PORT desired destination port
     // (6) DATA user data
@@ -204,24 +204,24 @@ private:
     //  +----+-----+-------+------+----------+----------+
     //  |VER | REP | RSV   | ATYP | BND.ADDR | BND.PORT |
     //  +----+-----+-------+------+----------+----------+
-    //  | 1  | 1   | X’00’ | 1    | Variable |    2     |
+    //  | 1  | 1   | X'00' | 1    | Variable |    2     |
     //  +----+-----+-------+------+----------+----------+
-    // (1) VER protocol version: X’05’
+    // (1) VER protocol version: X'05'
     // (2) REP Reply field:
-    //      (2.1) X’00’ succeeded
-    //      (2.2) X’01’ general SOCKS server failure
-    //      (2.3) X’02’ connection not allowed by ruleset
-    //      (2.4) X’03’ Network unreachable
-    //      (2.5) X’04’ Host unreachable
-    //      (2.6) X’05’ Connection refused
-    //      (2.7) X’06’ TTL expired
-    //      (2.8) X’07’ Command not supported
-    //      (2.9) X’08’ Address type not supported
+    //      (2.1) X'00' succeeded
+    //      (2.2) X'01' general SOCKS server failure
+    //      (2.3) X'02' connection not allowed by ruleset
+    //      (2.4) X'03' Network unreachable
+    //      (2.5) X'04' Host unreachable
+    //      (2.6) X'05' Connection refused
+    //      (2.7) X'06' TTL expired
+    //      (2.8) X'07' Command not supported
+    //      (2.9) X'08' Address type not supported
     // (3) RSV RESERVED
     // (4) ATYP address type of following address
-    //      (4.1) IP V4 address: X’01’
-    //      (4.2) DOMAINNAME: X’03’
-    //      (4.3) IP V6 address: X’04’
+    //      (4.1) IP V4 address: X'01'
+    //      (4.2) DOMAINNAME: X'03'
+    //      (4.3) IP V6 address: X'04'
     // (5) BND.ADDR server bound address
     // (6) BND.PORT server bound port in network octet order
     void reply_connect_result();

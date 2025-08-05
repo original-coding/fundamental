@@ -34,7 +34,7 @@ static void TestNormal(benchmark::State& state) {
     auto client = network::make_guard<rpc_client>("127.0.0.1", "9000");
     client->connect();
     std::string msg(blockSize, 'a');
-    if (blockSize < 1024 * 1024 * 32) {
+    if constexpr (blockSize < 1024 * 1024 * 32) {
         auto msg_recv = client->call<20000, std::string>("echo", msg);
         FASSERT(msg_recv == msg);
     }
@@ -49,7 +49,7 @@ static void TestProxy(benchmark::State& state) {
     client->set_proxy(gen_pipe_proxy());
     client->connect();
     std::string msg(blockSize, 'a');
-    if (blockSize < 1024 * 1024 * 32) {
+    if constexpr (blockSize < 1024 * 1024 * 32) {
         auto msg_recv = client->call<20000, std::string>("echo", msg);
         FASSERT(msg_recv == msg);
     }
@@ -66,7 +66,7 @@ static void TestSslProxy(benchmark::State& state) {
     client->set_proxy(gen_pipe_proxy());
     client->connect();
     std::string msg(blockSize, 'a');
-    if (blockSize < 1024 * 1024 * 32) {
+    if constexpr (blockSize < 1024 * 1024 * 32) {
         auto msg_recv = client->call<20000, std::string>("echo", msg);
         FASSERT(msg_recv == msg);
     }
@@ -84,7 +84,7 @@ static void TestSslProxyStream(benchmark::State& state) {
     std::string msg(blockSize, 'a');
     std::string recv;
     auto stream = client->upgrade_to_stream("echos");
-    if (blockSize < 1024 * 1024 * 32) {
+    if constexpr (blockSize < 1024 * 1024 * 32) {
         stream->Write(msg);
         stream->Read(recv, 0);
         FASSERT(msg == recv);

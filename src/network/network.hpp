@@ -159,7 +159,6 @@ struct protocal_helper {
         acceptor.open(end_point.protocol());
         acceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true));
 #ifndef NETWORK_IPV4_ONLY
-        // 关闭 v6_only 选项，允许同时接受 IPv4 和 IPv6 连接
         asio::ip::v6_only v6_option(false);
         acceptor.set_option(v6_option);
 #endif
@@ -167,7 +166,7 @@ struct protocal_helper {
         acceptor.listen();
     }
 };
-// ss -to | grep -i keepalive 可以查看是否启用了选项
+// ss -to | grep -i keepalive 
 inline void enable_tcp_keep_alive(asio::ip::tcp::socket& socket,
                                   bool enable               = true,
                                   std::int32_t idle_sec     = 30,

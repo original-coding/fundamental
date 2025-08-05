@@ -154,7 +154,7 @@ void NativeBindEventListener() {
         auto eventListenFunc = [](const Fundamental::EventPointerType& ptr) {
             auto raw = static_cast<const BindEventType*>(ptr.get());
             // we need to check event type and event size
-            FINFO("thread:{} recv(NativeNotifyEvents):{} index:{}", syscall(SYS_gettid), raw->msg, raw->index);
+            FINFO("recv(NativeNotifyEvents):{} index:{}", raw->msg, raw->index);
         };
         g_nativeEventSystem->AddEventListener(0, eventListenFunc);
     }
@@ -163,7 +163,7 @@ void NativeBindEventListener() {
         auto eventListenFunc = [](const Fundamental::EventPointerType& ptr) {
             auto raw = static_cast<const BindEventType*>(ptr.get());
             // we need to check event type and event size
-            FINFO("thread:{} recv(NativeCallEvents):{} index:{}", syscall(SYS_gettid), raw->msg, raw->index);
+            FINFO("recv(NativeCallEvents):{} index:{}", raw->msg, raw->index);
         };
         g_nativeEventSystem->AddEventListener(1, eventListenFunc);
     }

@@ -346,9 +346,9 @@ bool do_binary_unpack(const std::uint8_t*& data,
         }
     }
     case object_pack_data: return binary_unpack_object_recursively(data, len, dst_obj, ignore_invalid_properties);
-    default: FERR("unsupported packed type:{}", static_cast<std::int32_t>(type)); return false;
+    default: FERR("unsupported packed type:{}", static_cast<std::int32_t>(type)); break;
     }
-    return true;
+    return false;
 }
 
 bool binary_unpack_object_recursively(const std::uint8_t*& data,
@@ -670,9 +670,9 @@ bool binary_unpack_skip_item(const std::uint8_t*& data, std::size_t& len) {
         if (!binary_unpack_peek_chunk_size(data, len, object_size, total_size)) return false;
         return binary_unpack_skip_buf(data, len, object_size);
     }
-    default: return false;
+    default: break;
     }
-    return true;
+    return false;
 }
 bool binary_unpack_skip_buf(const std::uint8_t*& data, std::size_t& len, std::size_t skip_len) {
     if (len < skip_len) {

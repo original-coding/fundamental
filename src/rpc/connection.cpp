@@ -32,13 +32,13 @@ std::shared_ptr<ServerStreamReadWriter> connection::InitRpcStream() {
 
 void connection::process_transparent_proxy(std::size_t preread_len) {
 
-    auto self(this->shared_from_this());
+    auto self(shared_from_this());
 
     // switch to proxy connection,don't need timer check any more
     cancel_timer();
     b_waiting_process_any_data.exchange(false);
     do {
-        auto server = this->server_wref_.lock();
+        auto server = server_wref_.lock();
         if (!server) {
             FERR("server maybe post stop, cancel proxy");
             break;
@@ -69,7 +69,7 @@ void connection::process_ws_request(std::size_t preread_len) {
     cancel_timer();
     b_waiting_process_any_data.exchange(false);
     do {
-        auto server = this->server_wref_.lock();
+        auto server = server_wref_.lock();
         if (!server) {
             FERR("server maybe post stop, cancel proxy");
             break;
@@ -110,13 +110,13 @@ void connection::process_ws_request(std::size_t preread_len) {
 }
 
 void connection::process_socks5_proxy(const void* preread_data, std::size_t len) {
-    auto self(this->shared_from_this());
+    auto self(shared_from_this());
 
     // switch to proxy connection,don't need timer check any more
     cancel_timer();
     b_waiting_process_any_data.exchange(false);
     do {
-        auto server = this->server_wref_.lock();
+        auto server = server_wref_.lock();
         if (!server) {
             FERR("server maybe post stop, cancel proxy");
             break;
@@ -132,7 +132,7 @@ void connection::process_pipe_connection(std::size_t preread_len) {
     cancel_timer();
     b_waiting_process_any_data.exchange(false);
     do {
-        auto server = this->server_wref_.lock();
+        auto server = server_wref_.lock();
         if (!server) {
             FERR("server maybe post stop, cancel proxy");
             break;
@@ -164,7 +164,7 @@ void connection::probe_protocal(std::size_t offset, std::size_t target_probe_siz
             return;
         },
         "probe size must < kMaxProbeReadSize");
-    auto self(this->shared_from_this());
+    auto self(shared_from_this());
     if (offset < target_probe_size) {
         async_buffer_read(asio::buffer(head_ + offset, target_probe_size - offset),
                           [this, self, target_probe_size](asio::error_code ec, std::size_t length) {
@@ -234,7 +234,7 @@ void connection::probe_protocal(std::size_t offset, std::size_t target_probe_siz
 
 void connection::read_rpc_head(std::size_t offset) {
     FASSERT(offset <= kRpcHeadLen);
-    auto self(this->shared_from_this());
+    auto self(shared_from_this());
     async_buffer_read(
         asio::buffer(head_ + offset, kRpcHeadLen - offset), [this, self](asio::error_code ec, std::size_t length) {
             if (!reference_.is_valid()) {
@@ -268,7 +268,7 @@ void connection::read_rpc_head(std::size_t offset) {
 }
 
 void connection::read_body(uint32_t func_id, std::size_t size, std::size_t start_offset) {
-    auto self(this->shared_from_this());
+    auto self(shared_from_this());
 #ifdef RPC_VERBOSE
     FDEBUG("server {:p} try read size: {}", (void*)this, size - start_offset);
 #endif
@@ -388,7 +388,7 @@ void connection::process_rpc_request() {
     }
 }
 void connection::ssl_handshake() {
-    auto self(this->shared_from_this());
+    auto self(shared_from_this());
     asio::async_read(socket_, asio::buffer(head_, kSslPreReadSize),
                      [this, self](asio::error_code ec, std::size_t length) {
                          if (!reference_.is_valid()) {
@@ -442,7 +442,7 @@ void connection::write() {
         if (write_size_ > 0) write_buffers_.emplace_back(asio::buffer(msg.content.data(), write_size_));
     }
 
-    auto self = this->shared_from_this();
+    auto self = shared_from_this();
     async_write_buffers_some(std::vector<asio::const_buffer>(write_buffers_.begin(), write_buffers_.end()),
                              [this, self](asio::error_code ec, std::size_t length) {
                                  if (!reference_.is_valid()) {

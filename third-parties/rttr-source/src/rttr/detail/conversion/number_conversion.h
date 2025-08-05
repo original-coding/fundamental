@@ -29,6 +29,8 @@
 #define RTTR_NUMBER_CONVERSION_H_
 
 #include "rttr/detail/base/core_prerequisites.h"
+#include "std_conversion_functions.h"
+
 #include <limits>
 
 namespace rttr

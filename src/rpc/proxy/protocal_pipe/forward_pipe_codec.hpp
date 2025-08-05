@@ -272,10 +272,10 @@ struct forward_request_context : forward_context_interface {
         return std::make_tuple(ret, ret_str);
     }
     bool decode_item(std::string_view key, std::string value) override {
-        auto iter = kValueNameMap.find(key);
+        auto iter_value = kValueNameMap.find(key);
         // ignore invalid option
-        if (iter == kValueNameMap.end()) return true;
-        switch (iter->second) {
+        if (iter_value == kValueNameMap.end()) return true;
+        switch (iter_value->second) {
         case socks5_option_v: {
             auto iter = kForwardOptionMap.find(value);
             if (iter == kForwardOptionMap.end()) return false;

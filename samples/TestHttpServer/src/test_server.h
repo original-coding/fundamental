@@ -23,7 +23,7 @@ struct TestProxyRequest {
         return other.f == f && other.v == v && other.strs == strs;
     }
     bool operator!=(const TestProxyRequest& other)const {
-        return !(this->operator==(other));
+        return !(operator==(other));
     }
 };
 //return string

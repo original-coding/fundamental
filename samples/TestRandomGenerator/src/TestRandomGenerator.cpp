@@ -28,7 +28,7 @@ TYPED_TEST_SUITE(RandomTypeTest, AllTestTypes);
 
 TYPED_TEST(RandomTypeTest, TestAllNumberType) {
     for (std::size_t i = 0; i < 20; ++i) {
-        auto value = this->gen();
+        auto value =this->gen();
         EXPECT_GE(value, this->kMin);
         EXPECT_LE(value, this->kMax);
     }

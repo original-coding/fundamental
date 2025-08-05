@@ -6,9 +6,9 @@
 #include <vector>
 
 struct person {
-    std::int32_t id;
+    std::size_t id;
     std::string name;
-    std::int32_t age;
+    std::size_t age;
 };
 struct dummy1 {
     std::size_t id;
@@ -23,7 +23,7 @@ struct TestProxyRequest {
         return other.f == f && other.v == v && other.strs == strs;
     }
     bool operator!=(const TestProxyRequest& other)const {
-        return !(this->operator==(other));
+        return !(operator==(other));
     }
 };
 //return string

@@ -9,7 +9,7 @@ inline std::size_t Hash(const void* data, std::size_t size, std::size_t seed = 0
     if constexpr (sizeof(std::size_t) == 8) {
         return wyhash::wyhash(data, size, seed, wyhash::_wyp);
     } else {
-        return wyhash::wyhash32(data, size, seed);
+        return wyhash::wyhash32(data, size, static_cast<std::uint32_t>(seed));
     }
 }
 

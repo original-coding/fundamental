@@ -11,9 +11,9 @@ int main(int argc, char* argv[]) {
     if (argc > 1) root_path = argv[1];
     std::uint16_t port = 9000;
     if (argc > 2) {
-        port = std::stoul(argv[2]);
+        port = static_cast<std::uint16_t>(std::stoul(argv[2]));
     }
-    FINFO("run with {} <path> <port>",argv[0]);
+    FINFO("run with {} <path>:{} <port>:{}",argv[0],root_path,port);
     Fundamental::fs::SwitchToProgramDir(argv[0]);
     Fundamental::Logger::LoggerInitOptions options;
     options.minimumLevel = Fundamental::LogLevel::debug;

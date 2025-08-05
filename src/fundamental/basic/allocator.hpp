@@ -51,6 +51,31 @@ struct ObjectPoolAllocator : std_pmr::polymorphic_allocator<ObjectType> {
     ~ObjectPoolAllocator() {
     }
 #ifdef AllocatorTracker
+#if TARGET_PLATFORM_WINDOWS
+    _NODISCARD_RAW_PTR_ALLOC __declspec(allocator) ObjectType* allocate(_CRT_GUARDOVERFLOW size_t __n) {
+        std::cout << "allocate align_size:" << alignof(ObjectType) << " total:" << __n * sizeof(ObjectType)
+                  << " count:" << __n << std::endl;
+        return std_pmr::polymorphic_allocator<ObjectType>::allocate(__n);
+    }
+
+    void deallocate(ObjectType* __p, size_t __n) noexcept  {
+        std::cout << "deallocate align_size:" << alignof(ObjectType) << " total:" << __n * sizeof(ObjectType)
+                  << " count:" << __n << std::endl;
+        std_pmr::polymorphic_allocator<ObjectType>::deallocate(__p, __n);
+    }
+    template <typename... _CtorArgs>
+    [[nodiscard]] ObjectType* NewObject(_CtorArgs&&... __ctor_args) {
+        auto* __p = std_pmr::polymorphic_allocator<ObjectType>::allocate(1);
+        try {
+            std_pmr::polymorphic_allocator<ObjectType>::construct(__p, std::forward<_CtorArgs>(__ctor_args)...);
+        }
+        catch(...) {
+            std_pmr::polymorphic_allocator<ObjectType>::deallocate(__p, 1);
+            throw;
+        }
+        return __p;
+    }
+    #else
     [[nodiscard]]
     ObjectType* allocate(size_t __n) __attribute__((__returns_nonnull__)) {
         if ((__gnu_cxx::__int_traits<size_t>::__max / sizeof(ObjectType)) < __n) std::__throw_bad_array_new_length();
@@ -64,19 +89,21 @@ struct ObjectPoolAllocator : std_pmr::polymorphic_allocator<ObjectType> {
                   << " count:" << __n << std::endl;
         std_pmr::polymorphic_allocator<ObjectType>::deallocate(__p, __n);
     }
-#endif
-
     template <typename... _CtorArgs>
     [[nodiscard]] ObjectType* NewObject(_CtorArgs&&... __ctor_args) {
         auto* __p = std_pmr::polymorphic_allocator<ObjectType>::allocate(1);
-        __try
-        { std_pmr::polymorphic_allocator<ObjectType>::construct(__p, std::forward<_CtorArgs>(__ctor_args)...); }
+        __try {
+            std_pmr::polymorphic_allocator<ObjectType>::construct(__p, std::forward<_CtorArgs>(__ctor_args)...);
+        }
         __catch(...) {
             std_pmr::polymorphic_allocator<ObjectType>::deallocate(__p, 1);
             __throw_exception_again;
         }
         return __p;
     }
+    #endif
+#endif
+
 
     void DeleteObject(ObjectType* __p) {
         std_pmr::polymorphic_allocator<ObjectType>::destroy(__p);
@@ -85,8 +112,28 @@ struct ObjectPoolAllocator : std_pmr::polymorphic_allocator<ObjectType> {
 };
 
 template <typename ObjectType>
-struct ThreadSafeObjectPoolAllocator : ObjectPoolAllocator<ObjectType, true> {};
+struct ThreadSafeObjectPoolAllocator : ObjectPoolAllocator<ObjectType, true> {
+    ThreadSafeObjectPoolAllocator() = default;
+    template <typename U>
+    ThreadSafeObjectPoolAllocator(const ThreadSafeObjectPoolAllocator<U>&) noexcept {
+    }
+
+    template <typename U>
+    struct rebind {
+        using other = ThreadSafeObjectPoolAllocator<U>;
+    };
+};
 
 template <typename ObjectType>
-struct ThreadUnSafeObjectPoolAllocator : ObjectPoolAllocator<ObjectType, false> {};
+struct ThreadUnSafeObjectPoolAllocator : ObjectPoolAllocator<ObjectType, false> {
+    ThreadUnSafeObjectPoolAllocator() = default;
+    template <typename U>
+    ThreadUnSafeObjectPoolAllocator(const ThreadUnSafeObjectPoolAllocator<U>&) noexcept {
+    }
+
+    template <typename U>
+    struct rebind {
+        using other = ThreadUnSafeObjectPoolAllocator<U>;
+    };
+};
 } // namespace Fundamental

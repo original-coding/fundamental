@@ -17,6 +17,10 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${file_resources})
 # Create the executable
 add_executable(${app_target_name} "${file_source}" "${file_resources}")
 
+set_target_properties(${app_target_name} PROPERTIES
+    FOLDER ${samples_dir_name}
+)
+
 if(MSVC)
     set_property(TARGET ${app_target_name} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR})
 endif()
@@ -46,7 +50,11 @@ target_link_libraries(${app_target_name}
     PRIVATE
     gtest
 )
-
+if(TARGET_PLATFORM_WINDOWS)
+    set(DST_INSTALL_PATH "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+else()
+    set(DST_INSTALL_PATH "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
 install(FILES ${FUNDAMENTAL_ASSETS_PATH}/dh2048.pem
     ${FUNDAMENTAL_ASSETS_PATH}/server.crt
     ${FUNDAMENTAL_ASSETS_PATH}/server.key
@@ -54,11 +62,23 @@ install(FILES ${FUNDAMENTAL_ASSETS_PATH}/dh2048.pem
     ${FUNDAMENTAL_ASSETS_PATH}/client.crt
     ${FUNDAMENTAL_ASSETS_PATH}/ca_root.crt
     COMPONENT ssl-crt
-    DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    DESTINATION ${DST_INSTALL_PATH})
 
-add_custom_command(TARGET ${app_target_name}
-    POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "ssl pem installing"
-    COMMAND ${CMAKE_COMMAND} --install . --component ssl-crt
-    COMMENT "post-build ssl pem install"
-    VERBATIM)
+if(CMAKE_CONFIGURATION_TYPES) 
+    add_custom_command(
+        TARGET ${app_target_name}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} --install . 
+            --prefix "$<TARGET_FILE_DIR:${app_target_name}>"
+            --config $<CONFIG>
+            --component ssl-crt
+    )
+else() 
+    add_custom_command(
+        TARGET ${app_target_name}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} --install . 
+            --prefix "$<TARGET_FILE_DIR:${app_target_name}>"
+            --component ssl-crt
+    )
+endif()

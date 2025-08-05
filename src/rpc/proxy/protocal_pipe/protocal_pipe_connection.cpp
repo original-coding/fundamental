@@ -17,10 +17,10 @@ rpc_forward_connection(ref_connection, ""), forward_config_(forward_config) {
     }
 }
 void protocal_pipe_connection::process_protocal() {
-    auto [status, ret_len] = request_context.decode(read_cache.data(), read_cache.size());
+    auto [current_status, ret_len] = request_context.decode(read_cache.data(), read_cache.size());
     do {
-        if (status == forward::forward_parse_failed) break;
-        if (status == forward::forward_parse_success) {
+        if (current_status == forward::forward_parse_failed) break;
+        if (current_status == forward::forward_parse_success) {
             if (ret_len != read_cache.size()) break;
             start_pipe_proxy_handler();
         } else {
@@ -122,7 +122,7 @@ void protocal_pipe_connection::start_pipe_proxy_handler() {
 void protocal_pipe_connection::process_socks5_proxy() {
     std::uint16_t port = 0;
     try {
-        port = std::stoul(request_context.dst_service);
+        port = static_cast<std::uint16_t>(std::stoul(request_context.dst_service));
     } catch (...) {
         FERR("invalud socks5 dst service {}", request_context.dst_service);
         return;

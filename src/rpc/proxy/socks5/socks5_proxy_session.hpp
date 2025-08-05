@@ -3,22 +3,35 @@
 #include "network/upgrade_interface.hpp"
 #include "socks5_type.h"
 // linux only
-
+#if TARGET_PLATFORM_LINUX
 #include <arpa/inet.h>
+#else
+#include<WS2tcpip.h>
+#endif
 namespace SocksV5
 {
+
+static inline bool inet_pton_imp(const char *ip_addr,void * dst_addr,bool is_ipv4) {
+#if TARGET_PLATFORM_LINUX
+    return inet_pton(is_ipv4 ? AF_INET : AF_INET6, ip_addr, dst_addr)==1;
+#else
+    return inet_pton(is_ipv4 ? AF_INET : AF_INET6, ip_addr, dst_addr) == 1;
+#endif
+}
+
 class socks5_proxy_imp : public network::network_upgrade_interface {
 public:
     template <typename... Args>
     static decltype(auto) make_shared(Args&&... args) {
         return std::make_shared<socks5_proxy_imp>(std::forward<Args>(args)...);
     }
+    template<typename port_type>
     socks5_proxy_imp(const std::string& host,
-                     std::uint16_t port,
+                     port_type port,
                      const std::string& user,
                      const std::string& passwd,
                      Socks5HostType host_type = Socks5HostType::DoMainName) :
-    dst_host(host), dst_port(port), username(user), passwd(passwd), host_type(host_type) {
+    dst_host(host), dst_port(static_cast<std::uint16_t>(port)), username(user), passwd(passwd), host_type(host_type) {
     }
     const char* interface_name() const override {
         return "socks5";
@@ -92,10 +105,10 @@ protected:
         sendBufCache.resize(packet_len);
         std::size_t offset     = 0;
         sendBufCache[offset++] = SocksVersion::V5;
-        sendBufCache[offset++] = username.size();
+        sendBufCache[offset++] = static_cast<std::uint8_t>(username.size());
         std::memcpy(sendBufCache.data() + offset, username.data(), username.size());
         offset += username.size();
-        sendBufCache[offset++] = passwd.size();
+        sendBufCache[offset++] =static_cast<std::uint8_t>( passwd.size());
         std::memcpy(sendBufCache.data() + offset, passwd.data(), passwd.size());
         offset += passwd.size();
         network::write_buffer_t write_buffers;
@@ -143,21 +156,21 @@ protected:
         sendBufCache[offset++] = host_type;
         switch (host_type) {
         case Socks5HostType::Ipv4: {
-            if (inet_pton(AF_INET, dst_host.c_str(), sendBufCache.data() + offset) != 1) {
+            if (!inet_pton_imp( dst_host.c_str(), sendBufCache.data() + offset,true)) {
                 finish_cb_(std::make_error_code(std::errc::invalid_argument), "Invalid IPv4 address");
                 return;
             }
             offset += 4;
         } break;
         case Socks5HostType::Ipv6: {
-            if (inet_pton(AF_INET6, dst_host.c_str(), sendBufCache.data() + offset) != 1) {
+            if (!inet_pton_imp(dst_host.c_str(), sendBufCache.data() + offset, false)) {
                 finish_cb_(std::make_error_code(std::errc::invalid_argument), "Invalid IPv6 address");
                 return;
             }
             offset += 16;
         } break;
         default: {
-            sendBufCache[offset++] = dst_host.size();
+            sendBufCache[offset++] = static_cast<std::uint8_t>(dst_host.size());
             std::memcpy(sendBufCache.data() + offset, dst_host.data(), dst_host.size());
             offset += dst_host.size();
         } break;

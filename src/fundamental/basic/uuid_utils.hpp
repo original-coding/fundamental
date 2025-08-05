@@ -75,10 +75,10 @@ public:
     }
 
     void process_byte(uint8_t octet) {
-        this->m_block[this->m_blockByteIndex++] = octet;
-        ++this->m_byteCount;
+        m_block[m_blockByteIndex++] = octet;
+        ++m_byteCount;
         if (m_blockByteIndex == block_bytes) {
-            this->m_blockByteIndex = 0;
+            m_blockByteIndex = 0;
             process_block();
         }
     }
@@ -98,9 +98,9 @@ public:
     }
 
     uint32_t const* get_digest(digest32_t digest) {
-        size_t const bitCount = this->m_byteCount * 8;
+        size_t const bitCount = m_byteCount * 8;
         process_byte(0x80);
-        if (this->m_blockByteIndex > 56) {
+        if (m_blockByteIndex > 56) {
             while (m_blockByteIndex != 0) {
                 process_byte(0);
             }

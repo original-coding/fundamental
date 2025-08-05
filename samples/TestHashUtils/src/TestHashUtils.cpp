@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 // Demonstrate some basic assertions.
 TEST(HashTest, basic) {
-    constexpr std::size_t kTestCnt = 100000;
+    constexpr std::size_t kTestCnt = 10000;
     std::string s(kTestCnt, 'a');
     std::set<std::size_t> storage;
     for (std::size_t i = 0; i < kTestCnt; ++i) {

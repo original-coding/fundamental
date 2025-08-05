@@ -6,8 +6,14 @@
 #include "fundamental/basic/buffer.hpp"
 #include "fundamental/basic/integer_codec.hpp"
 #include "fundamental/basic/log.h"
-
+#ifdef _MSC_VER
+    #pragma warning(push)
+    #pragma warning(disable : 26819 26437 26439 26495 26800 26498)
+#endif
 #include <rttr/type>
+#ifdef _MSC_VER
+    #pragma warning(pop)
+#endif
 namespace Fundamental::io
 {
 using BinaryPackSizeType=std::uint64_t;
@@ -159,8 +165,10 @@ inline bool binary_unpack_tuple_helper(const std::uint8_t*& data,
         auto& item = std::get<Index>(t);
         if (!binary_unpack_helper(data, len, item, ignore_invalid_properties)) return false;
         return binary_unpack_tuple_helper<Index + 1>(data, len, t, ignore_invalid_properties);
+    } else {
+        return true;
     }
-    return true;
+    
 }
 
 } // namespace internal

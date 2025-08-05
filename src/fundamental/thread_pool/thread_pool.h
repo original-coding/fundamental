@@ -164,6 +164,9 @@ public:
     // return the number of currently executing tasks
     std::size_t ProcessingTasks() const;
     void Spawn(int count = 1);
+    void Spawn(std::size_t count = 1) {
+        Spawn(static_cast<std::int32_t>(count));
+    }
     /// @brief  join all work threads
     /// @return joined thread nums
     std::size_t Join();
@@ -231,7 +234,7 @@ protected:
         config_.max_threads_limit    = max_thread_num;
         config_.min_work_threads_num = min_tread_num;
         // reserve minimal work threads
-        if (config_.min_work_threads_num > 0) Spawn(config_.min_work_threads_num);
+        if (config_.min_work_threads_num > 0LU) Spawn(static_cast<std::int32_t>(config_.min_work_threads_num));
     }
     Task Dequeue(std::int64_t idle_wait_time_ms, bool& is_timeout); // returns null function if joining
     void Run(std::size_t index);

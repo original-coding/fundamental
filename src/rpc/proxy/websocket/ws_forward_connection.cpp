@@ -13,11 +13,11 @@ rpc_forward_connection(ref_connection, std::move(pre_read_data)), route_query_f(
 }
 void websocket_forward_connection::process_protocal() {
     auto read_buffer        = client2server.GetWriteBuffer();
-    auto [status, peek_len] = parse_context.parse(read_buffer.data(), read_buffer.size());
+    auto [status_current, peek_len] = parse_context.parse(read_buffer.data(), read_buffer.size());
     do {
-        if (status == websocket::http_handler_context::parse_status::parse_failed) break;
+        if (status_current == websocket::http_handler_context::parse_status::parse_failed) break;
         client2server.UpdateWriteBuffer(peek_len);
-        if (status == websocket::http_handler_context::parse_status::parse_success) {
+        if (status_current == websocket::http_handler_context::parse_status::parse_success) {
             start_ws_proxy();
         } else {
             read_more_data();

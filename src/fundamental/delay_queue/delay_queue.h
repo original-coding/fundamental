@@ -61,7 +61,7 @@ public:
         using super::super;
 
         operator bool() const noexcept {
-            return !this->expired();
+            return !expired();
         }
     };
     using HandleType = Handle_;

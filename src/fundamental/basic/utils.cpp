@@ -23,7 +23,6 @@
 #include <cstring>
 
 #include <iomanip>
-#include <pthread.h>
 #include <sstream>
 
 namespace Fundamental
@@ -127,27 +126,24 @@ std::string RemoveComments(std::string_view input) {
                 inSingleLineComment = false;
                 result += '\n';
             }
-            // 单行注释下字符都忽略
         } else if (inMultiLineComment) {
             if (input[i] == '*' && i + 1 < input.size() && input[i + 1] == '/') {
                 inMultiLineComment = false;
-                // 跳过'/'
                 ++i;
             }
-            // 忽略多行注释中间的内容
         } else {
             if (input[i] == '/' && i + 1 < input.size()) {
                 if (input[i + 1] == '/') {
-                    inSingleLineComment = true; // 开始单行注释
-                    i++;                        // 跳过下一个 '/'
+                    inSingleLineComment = true;
+                    i++;                    
                 } else if (input[i + 1] == '*') {
-                    inMultiLineComment = true; // 开始多行注释
-                    i++;                       // 跳过下一个 '*'
+                    inMultiLineComment = true; 
+                    i++;                     
                 } else {
-                    result += input[i]; // 不是注释，保留字符
+                    result += input[i];
                 }
             } else {
-                result += input[i]; // 不是注释，保留字符
+                result += input[i];
             }
         }
     }

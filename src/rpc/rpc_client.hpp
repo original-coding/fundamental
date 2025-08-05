@@ -18,7 +18,7 @@
 
 #include "fundamental/basic/log.h"
 #include "fundamental/events/event_system.h"
-
+#include "fundamental/basic/buffer.hpp"
 namespace network
 {
 namespace rpc_service
@@ -857,7 +857,7 @@ private:
 
                 if (!outbox_.empty()) {
                     // more messages to send
-                    this->do_write();
+                    do_write();
                 }
             });
     }
@@ -1370,7 +1370,7 @@ inline bool ClientStreamReadWriter::Write(U&& response) {
     asio::post(client_->executor_, [this, data = std::move(data), ref = shared_from_this()]() mutable {
         if (!reference_.is_valid()) return;
         auto& new_item = write_cache_.emplace_back();
-        new_item.size  = htole32(static_cast<std::uint32_t>(data.size()));
+        new_item.size  = Fundamental::host_value_convert(static_cast<std::uint32_t>(data.size()));
         new_item.type  = static_cast<std::uint8_t>(rpc_stream_data_status::rpc_stream_data);
         new_item.data  = std::move(data);
         if (write_cache_.size() == 1) handle_write();
@@ -1506,7 +1506,7 @@ inline void ClientStreamReadWriter::read_head() {
                         std::scoped_lock<std::mutex> locker(mutex);
                         last_data_status_ = rpc_stream_data_status::rpc_stream_data;
                     }
-                    read_packet_buffer.size = le32toh(read_packet_buffer.size);
+                    read_packet_buffer.size = Fundamental::host_value_convert(read_packet_buffer.size);
                     try {
                         if (read_packet_buffer.size > read_packet_buffer.data.size())
                             read_packet_buffer.data.resize(read_packet_buffer.size);
@@ -1553,7 +1553,7 @@ inline void ClientStreamReadWriter::read_body(std::uint32_t offset) {
                        current_offset, length);
 #endif
                 if (current_offset < read_packet_buffer.size) {
-                    read_body(current_offset);
+                    read_body(static_cast<std::uint32_t>(current_offset));
                     return;
                 }
 #ifdef RPC_VERBOSE
