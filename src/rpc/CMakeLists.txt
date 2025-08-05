@@ -27,14 +27,15 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lib_source})
 
 add_library(${lib_name} STATIC ${lib_source})
 
+set_target_properties(${lib_name} PROPERTIES
+    FOLDER ${src_root_dir_name}
+)
+
 #target_compile_definitions(${lib_name} PUBLIC RPC_VERBOSE=1)
 target_include_directories(${lib_name} PUBLIC
     ${src_root_dir}
 )
 
-set_target_properties(${lib_name} PROPERTIES
-    FOLDER ${src_root_dir}
-)
 
 # Config link dependencies
 target_link_libraries(${lib_name} PUBLIC

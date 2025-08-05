@@ -1,5 +1,7 @@
 #include "parallel.hpp"
 #include <atomic>
+#include <string>
+
 namespace Fundamental::internal
 {
 static void InitParallelThreadPool() {

@@ -1,6 +1,5 @@
 # Set App target name
 get_filename_component(app_target_name ${CMAKE_CURRENT_LIST_DIR} NAME)
-set(app_ide_folder ${apps_dir_name}/${app_target_name})
 
 # Set the source files to compile
 file(GLOB_RECURSE file_source
@@ -26,7 +25,9 @@ target_include_directories(${app_target_name}
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-
+set_target_properties(${app_target_name} PROPERTIES
+    FOLDER ${apps_dir_name}
+)
 # Config links
 target_link_libraries(${app_target_name}
     PRIVATE

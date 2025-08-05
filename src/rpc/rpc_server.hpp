@@ -37,9 +37,10 @@ public:
     static decltype(auto) make_shared(Args&&... args) {
         return std::make_shared<rpc_server>(std::forward<Args>(args)...);
     }
-    rpc_server(unsigned short port, size_t timeout_msec = 30000) :
+    template<typename port_type>
+    rpc_server(port_type port, size_t timeout_msec = 30000) :
     acceptor_(io_context_pool::Instance().get_io_context()), timeout_msec_(timeout_msec) {
-        protocal_helper::init_acceptor(acceptor_, port);
+        protocal_helper::init_acceptor(acceptor_, static_cast<std::uint16_t>(port));
     }
     ~rpc_server() {
         FDEBUG("release rpc_server");

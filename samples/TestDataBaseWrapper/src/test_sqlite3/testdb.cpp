@@ -204,7 +204,7 @@ TEST(test_sqlite3, test_function_args) {
 
 struct strlen_aggr {
     void step(const string& s) {
-        total_len += s.size();
+        total_len +=static_cast<std::int32_t>(s.size());
     }
 
     int finish() {

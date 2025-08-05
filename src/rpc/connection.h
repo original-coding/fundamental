@@ -17,6 +17,7 @@
 
 #include "fundamental/basic/log.h"
 #include "fundamental/events/event_system.h"
+#include "fundamental/basic/buffer.hpp"
 
 using asio::ip::tcp;
 
@@ -248,7 +249,7 @@ private:
     void do_ssl_handshake(const char* preread_data, std::size_t read_len) {
         // handle ssl
 #ifndef NETWORK_DISABLE_SSL
-        auto self   = this->shared_from_this();
+        auto self   = shared_from_this();
         ssl_stream_ = std::make_unique<asio::ssl::stream<asio::ip::tcp::socket&>>(socket_, *ssl_context_ref);
 
         ssl_stream_->async_handshake(asio::ssl::stream_base::server, asio::const_buffer(preread_data, read_len),
@@ -291,7 +292,7 @@ private:
     }
     void process_request(uint32_t func_id, const char* data, std::size_t size) {
         route_result_t ret =
-            router_.route<connection>(func_id, std::string_view { data, size }, this->shared_from_this());
+            router_.route<connection>(func_id, std::string_view { data, size }, shared_from_this());
         if (delay_) {
             delay_ = false;
         } else {
@@ -302,9 +303,9 @@ private:
     void process_rpc_stream(uint32_t func_id) {
         cancel_timer();
         // allocate rpc stream
-        rpc_stream_rw_ = ServerStreamReadWriter::make_shared(this->shared_from_this());
+        rpc_stream_rw_ = ServerStreamReadWriter::make_shared(shared_from_this());
         route_result_t ret =
-            router_.route<connection>(func_id, std::string_view { nullptr, 0 }, this->shared_from_this());
+            router_.route<connection>(func_id, std::string_view { nullptr, 0 }, shared_from_this());
         // force clear rpc stream cache
         rpc_stream_rw_ = nullptr;
         response_interal(req_id_, std::move(ret.result), request_type::rpc_stream);
@@ -374,7 +375,7 @@ private:
             return;
         }
 
-        auto self(this->shared_from_this());
+        auto self(shared_from_this());
         timeout_check_timer_.expires_after(std::chrono::milliseconds(timeout_msec_));
         timeout_check_timer_.async_wait([this, self](const asio::error_code& ec) {
             if (!reference_.is_valid()) {
@@ -535,7 +536,7 @@ inline bool ServerStreamReadWriter::Write(U&& response) {
     asio::post(conn_->executor_, [this, data = std::move(data), ref = shared_from_this()]() mutable {
         if (!reference_.is_valid()) return;
         auto& new_item = write_cache_.emplace_back();
-        new_item.size  = htole32(static_cast<std::uint32_t>(data.size()));
+        new_item.size  = Fundamental::host_value_convert(static_cast<std::uint32_t>(data.size()));
         new_item.type  = static_cast<std::uint8_t>(rpc_stream_data_status::rpc_stream_data);
         new_item.data  = std::move(data);
         if (write_cache_.size() == 1) handle_write();
@@ -651,7 +652,7 @@ inline void ServerStreamReadWriter::read_head() {
                         std::scoped_lock<std::mutex> locker(mutex);
                         last_data_status_ = status;
                     }
-                    read_packet_buffer.size = le32toh(read_packet_buffer.size);
+                    read_packet_buffer.size =Fundamental::host_value_convert(read_packet_buffer.size);
                     if (read_packet_buffer.size > read_packet_buffer.data.size())
                         read_packet_buffer.data.resize(read_packet_buffer.size);
                     read_body();
@@ -711,7 +712,7 @@ inline void ServerStreamReadWriter::read_body(std::uint32_t offset) {
 #endif
                 if (current_read_offset < read_packet_buffer.size) {
 
-                    read_body(current_read_offset);
+                    read_body(static_cast<std::uint32_t>(current_read_offset));
                     return;
                 }
 #ifdef RPC_VERBOSE

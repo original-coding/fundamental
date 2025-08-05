@@ -11,6 +11,10 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src FILES ${file_source})
 # Create the executable
 add_library(${lib_name} STATIC "${file_source}")
 
+set_target_properties(${lib_name} PROPERTIES
+    FOLDER ${samples_dir_name}
+)
+
 # Config includes
 target_include_directories(${lib_name}
   PUBLIC

@@ -15,6 +15,7 @@ if(FUNDAMENTAL_ENABLE_SQLITE3_SUPPORT)
         sqlite3/*.hpp
     )
     list(APPEND lib_source ${sqlite3_src})
+if(TERGET_PLATFORM_LINUX)
     # we should get sqlite3 with pkgconfig
     # libsqlite3-dev should be installed firstly 
     find_package(PkgConfig REQUIRED)
@@ -30,6 +31,10 @@ if(FUNDAMENTAL_ENABLE_SQLITE3_SUPPORT)
     else()
         message(FATAL_ERROR "you should install libsqlite3-dev package")
     endif()
+else()
+    find_package(SQLite3 REQUIRED)
+    target_link_libraries(${lib_name}_property INTERFACE SQLite::SQLite3)
+endif()
     if(FUNDAMENTAL_ENABLE_SQLITE3_LOADABLE_EXT_SUPPORT)
         target_compile_definitions(${lib_name}_property INTERFACE IMPORT_SQLITE_LOADABLE_EXTENSION)
     endif()
@@ -59,14 +64,15 @@ endif()
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lib_source})
 
 add_library(${lib_name} STATIC ${lib_source})
+set_target_properties(${lib_name} PROPERTIES
+    FOLDER ${src_root_dir_name}
+)
 
 target_include_directories(${lib_name} PUBLIC
     ${src_root_dir}
 )
 
-set_target_properties(${lib_name} PROPERTIES
-    FOLDER ${src_root_dir}
-)
+
 
 
 # Config link dependencies

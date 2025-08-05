@@ -266,15 +266,15 @@ inline void context::result(long long int value) {
 }
 
 inline void context::result(std::string const& value) {
-    sqlite3_result_text(ctx_, value.c_str(), value.size(), SQLITE_TRANSIENT);
+    sqlite3_result_text(ctx_, value.c_str(), static_cast<std::int32_t>(value.size()), SQLITE_TRANSIENT);
 }
 
 inline void context::result(std::string_view value) {
-    sqlite3_result_text(ctx_, value.data(), value.size(), SQLITE_STATIC);
+    sqlite3_result_text(ctx_, value.data(), static_cast<std::int32_t>(value.size()), SQLITE_STATIC);
 }
 
 inline void context::result(char const* value, bool fcopy) {
-    sqlite3_result_text(ctx_, value, std::strlen(value), fcopy ? SQLITE_TRANSIENT : SQLITE_STATIC);
+    sqlite3_result_text(ctx_, value, static_cast<std::int32_t>(std::strlen(value)), fcopy ? SQLITE_TRANSIENT : SQLITE_STATIC);
 }
 
 inline void context::result(void const* value, int n, bool fcopy) {
@@ -294,7 +294,7 @@ inline void context::result_copy(int idx) {
 }
 
 inline void context::result_error(char const* msg) {
-    sqlite3_result_error(ctx_, msg, std::strlen(msg));
+    sqlite3_result_error(ctx_, msg, static_cast<std::int32_t>(std::strlen(msg)));
 }
 
 inline void* context::aggregate_data(int size) {

@@ -173,7 +173,7 @@ public:
         auto auto_disconnect_cb = [callback, token, this, reserve_handle](Args... args) -> ReturnType {
             auto ptr = token.lock();
             if (!ptr) {
-                this->DisConnect(*reserve_handle);
+                DisConnect(*reserve_handle);
                 if constexpr (!std::is_void_v<ReturnType>) {
                     return ReturnType {};
                 } else {

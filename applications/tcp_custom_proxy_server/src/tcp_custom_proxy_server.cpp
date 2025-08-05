@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
     port                  = arg_parser.GetValue("port", port);
     proxy_host            = arg_parser.GetValue("proxy_host", proxy_host);
     proxy_port            = arg_parser.GetValue("proxy_port", proxy_port);
-    auto s_server         = network::make_guard<rpc_server>(port);
+    auto s_server         = network::make_guard<rpc_server>(static_cast<std::uint16_t>(port));
     auto p                = s_server.get();
     auto& server          = *s_server.get();
     network::rpc_server_external_config config;

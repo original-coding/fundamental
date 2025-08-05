@@ -19,7 +19,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Enbale code IDE to use folders, this will enable source_group(TREE,...)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-
 #add cmake search directory
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 set(FUNDAMENTAL_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake CACHE INTERNAL "")

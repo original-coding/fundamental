@@ -52,7 +52,7 @@ static Fundamental::DelayQueue& s_delay_queue = *(Fundamental::Application::Inst
 std::string translate(rpc_conn conn, const std::string& orignal) {
     std::string temp = orignal;
     for (auto& c : temp) {
-        c = std::toupper(c);
+        c = static_cast<char>(std::toupper(c));
     }
     return temp;
 }

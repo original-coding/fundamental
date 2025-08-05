@@ -101,7 +101,7 @@ public:
 
     void remove_handler(std::string const& name) {
         uint32_t key = MD5::MD5Hash32(name.data());
-        this->map_invokers_.erase(key);
+        map_invokers_.erase(key);
         key2func_name_.erase(key);
     }
 
@@ -201,7 +201,7 @@ private:
 
     template <bool is_pub, typename Function>
     void register_nonmember_func(uint32_t key, Function f) {
-        this->map_invokers_[key] = [f](std::weak_ptr<connection> conn, std::string_view str, std::string& result) {
+        map_invokers_[key] = [f](std::weak_ptr<connection> conn, std::string_view str, std::string& result) {
             using args_tuple = typename function_traits<Function>::bare_tuple_type;
             msgpack_codec codec;
             try {
@@ -218,7 +218,7 @@ private:
 
     template <bool is_pub, typename Function, typename Self>
     void register_member_func(uint32_t key, const Function& f, Self* self) {
-        this->map_invokers_[key] = [f, self](std::weak_ptr<connection> conn, std::string_view str,
+        map_invokers_[key] = [f, self](std::weak_ptr<connection> conn, std::string_view str,
                                              std::string& result) {
             using args_tuple = typename function_traits<Function>::bare_tuple_type;
             msgpack_codec codec;

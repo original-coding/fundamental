@@ -2,8 +2,6 @@
 #pragma once
 
 #include "meta_control.h"
-#include "nlohmann/json.hpp"
-#include <rttr/type>
 #include <string>
 namespace Fundamental {
 using json = nlohmann::json;

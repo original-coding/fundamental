@@ -144,7 +144,7 @@ public:
     }
 
     int bind(int idx, char const* value, copy_semantic fcopy);
-    int bind(int idx, void const* value, int n, copy_semantic fcopy);
+    int bind(int idx, void const* value, std::size_t n, copy_semantic fcopy);
     int bind(int idx, std::string const& value, copy_semantic fcopy);
     int bind(int idx, char16_t const* value, copy_semantic fcopy);
     int bind(int idx);
@@ -158,7 +158,7 @@ public:
 
     int bind(char const* name, double value);
     int bind(char const* name, char const* value, copy_semantic fcopy);
-    int bind(char const* name, void const* value, int n, copy_semantic fcopy);
+    int bind(char const* name, void const* value, std::size_t n, copy_semantic fcopy);
     int bind(char const* name, std::string const& value, copy_semantic fcopy);
     int bind(char const* name);
     int bind(char const* name, null_type);
@@ -565,7 +565,7 @@ inline int statement::prepare(char const* stmt) {
 }
 
 inline int statement::prepare_impl(char const* stmt) {
-    return sqlite3_prepare_v2(db_.db_, stmt, std::strlen(stmt), &stmt_, &tail_);
+    return sqlite3_prepare_v2(db_.db_, stmt, static_cast<std::int32_t>(std::strlen(stmt)), &stmt_, &tail_);
 }
 
 inline int statement::finish() {
@@ -600,20 +600,20 @@ inline int statement::bind(int idx, double value) {
 }
 
 inline int statement::bind(int idx, char const* value, copy_semantic fcopy) {
-    return sqlite3_bind_text(stmt_, idx, value, std::strlen(value), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
+    return sqlite3_bind_text(stmt_, idx, value, static_cast<std::int32_t>(std::strlen(value)), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
 }
 
 inline int statement::bind(int idx, char16_t const* value, copy_semantic fcopy) {
-    return sqlite3_bind_text16(stmt_, idx, value, std::char_traits<char16_t>::length(value) * sizeof(char16_t),
+    return sqlite3_bind_text16(stmt_, idx, value, static_cast<std::int32_t>(std::char_traits<char16_t>::length(value) * sizeof(char16_t)),
                                fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
 }
 
-inline int statement::bind(int idx, void const* value, int n, copy_semantic fcopy) {
-    return sqlite3_bind_blob(stmt_, idx, value, n, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
+inline int statement::bind(int idx, void const* value, std::size_t n, copy_semantic fcopy) {
+    return sqlite3_bind_blob(stmt_, idx, value, static_cast<std::int32_t>(n), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
 }
 
 inline int statement::bind(int idx, std::string const& value, copy_semantic fcopy) {
-    return sqlite3_bind_text(stmt_, idx, value.c_str(), value.size(), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
+    return sqlite3_bind_text(stmt_, idx, value.c_str(), static_cast<std::int32_t>(value.size()), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
 }
 
 inline int statement::bind(int idx) {
@@ -634,9 +634,9 @@ inline int statement::bind(char const* name, char const* value, copy_semantic fc
     return bind(idx, value, fcopy);
 }
 
-inline int statement::bind(char const* name, void const* value, int n, copy_semantic fcopy) {
+inline int statement::bind(char const* name, void const* value, std::size_t n, copy_semantic fcopy) {
     auto idx = sqlite3_bind_parameter_index(stmt_, name);
-    return bind(idx, value, n, fcopy);
+    return bind(idx, value, static_cast<std::int32_t>(n), fcopy);
 }
 
 inline int statement::bind(char const* name, std::string const& value, copy_semantic fcopy) {

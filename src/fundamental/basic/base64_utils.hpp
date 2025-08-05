@@ -25,7 +25,7 @@ inline constexpr std::array<std::uint8_t, 256> generateBase64DecodeTable(const c
     }
     // why we can't use __builtin_memset here?
     // which will cause compile error ‘__builtin_memset(((void*)(& decodeTable.std::array<unsigned char,
-    // 256>::_M_elems)), 128, 256)’ is not a constant expression
+    // 256>::_M_elems)), 128, 256)' is not a constant expression
     for (std::size_t i = 0; i < 64; ++i) {
         decodeTable[base64Chars[i]] = static_cast<std::uint8_t>(i);
     }

@@ -5,22 +5,37 @@
 
 namespace Fundamental {
 
+template <typename T, typename = std::void_t<>>
+struct SelectRandomValueType{
+    using GenNumberType=T;
+};
+
+template <typename T>
+struct SelectRandomValueType<T, std::void_t<std::enable_if_t<sizeof(T)==1>>>
+{
+    using GenNumberType = std::conditional_t<std::is_signed_v<T>,std::int32_t,std::uint32_t>;
+};
+
+
 template <typename NumberType, typename UniformRandomNumberGenerator = std::mt19937>
 class RandomGenerator final {
 public:
-    using GenNumberType = NumberType;
+    using GenNumberType =typename SelectRandomValueType<NumberType>::GenNumberType;
 
 public:
     constexpr RandomGenerator(UniformRandomNumberGenerator&& gen,
                               NumberType _min = std::numeric_limits<NumberType>::min(),
                               NumberType _max = std::numeric_limits<NumberType>::max()) :
-    distribution(std::uniform_int_distribution<NumberType>(_min, _max)),
+    distribution(std::uniform_int_distribution<GenNumberType>(static_cast<GenNumberType>(_min),
+                                                              static_cast<GenNumberType>(_max))),
     generator(std::forward<UniformRandomNumberGenerator>(gen)) {
     }
     constexpr RandomGenerator(const UniformRandomNumberGenerator& gen,
                               NumberType _min = std::numeric_limits<NumberType>::min(),
                               NumberType _max = std::numeric_limits<NumberType>::max()) :
-    distribution(std::uniform_int_distribution<NumberType>(_min, _max)), generator(gen) {
+    distribution(std::uniform_int_distribution<GenNumberType>(static_cast<GenNumberType>(_min),
+                                                              static_cast<GenNumberType>(_max))),
+    generator(gen) {
     }
     RandomGenerator(const RandomGenerator& other) : distribution(other.distribution), generator(other.generator) {
     }
@@ -40,15 +55,15 @@ public:
     }
     // gen random number
     [[nodiscard]] constexpr NumberType operator()() {
-        return distribution(generator);
+        return static_cast<NumberType>(distribution(generator));
     }
     [[nodiscard]] constexpr NumberType gen() {
-        return distribution(generator);
+        return static_cast<NumberType>(distribution(generator));
     }
     // gen random number array
     constexpr void gen(NumberType* dst, std::size_t count) {
         for (std::size_t i = 0; i < count; ++i)
-            dst[i] = distribution(generator);
+            dst[i] = static_cast<NumberType>(distribution(generator));
     }
     // gen another value type with multipe numerator/denominator
     template <typename U>
@@ -63,7 +78,7 @@ public:
     }
 
 private:
-    std::uniform_int_distribution<NumberType> distribution;
+    std::uniform_int_distribution<GenNumberType> distribution;
     UniformRandomNumberGenerator generator;
 };
 

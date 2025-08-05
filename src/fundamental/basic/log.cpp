@@ -13,7 +13,15 @@
 #include <unordered_map>
 
 #if TARGET_PLATFORM_WINDOWS
+    #ifdef _MSC_VER
+        #pragma warning(push)
+        #pragma warning(disable : 4996 26498 26495 26819 26800)
+    #endif
     #include "spdlog/sinks/windebug_sink.h"
+    #ifdef _MSC_VER
+        #pragma warning(pop)
+        #pragma warning(disable : 4996 26498 26495 26819 26800)
+    #endif
     #include <windows.h>
 
     #include <dbghelp.h>
@@ -280,8 +288,9 @@ void Logger::Initialize(LoggerInitOptions options, Logger* logger) {
             initList.emplace_back(std::make_shared<spdlog::sinks::wincolor_stdout_sink_mt>());
             initList.emplace_back(std::make_shared<spdlog::sinks::windebug_sink_mt>());
 #elif TARGET_PLATFORM_LINUX
-#endif
             initList.emplace_back(std::make_shared<spdlog::sinks::ansicolor_stdout_sink_st>());
+#endif
+            
         }
         std::string fileName;
         auto logOutputPath = options.logOutputPath.value_or(LoggerInitOptions::kDefaultLogOutputPath);
@@ -376,6 +385,7 @@ void Logger::PrintBackTrace() {
 
         DWORD64 displacement      = 0;
         IMAGEHLP_SYMBOL64* symbol = (IMAGEHLP_SYMBOL64*)malloc(sizeof(IMAGEHLP_SYMBOL64) + 256);
+        if (!symbol) break;
         symbol->SizeOfStruct      = sizeof(IMAGEHLP_SYMBOL64);
         symbol->MaxNameLength     = 255;
 

@@ -44,6 +44,14 @@ endif()
 
 
 if(FUNDAMENTAL_ENABLE_SCRIPT_SUPPORT)
-#config chaiscript
-add_subdirectory(ChaiScript)
+    #config chaiscript
+    add_subdirectory(ChaiScript)
+endif()
+
+
+if(TARGET_PLATFORM_WINDOWS)
+    add_subdirectory(wingetopt)
+    target_include_directories(wingetopt INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/wingetopt/src
+    )
 endif()

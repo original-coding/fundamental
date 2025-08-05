@@ -2,7 +2,14 @@
 #include <array>
 #include <cstdio>
 #include <iostream>
+#ifdef _MSC_VER
+    #pragma warning(push)
+    #pragma warning(disable : 26819 26437 26439 26495 26800 26498) // disable warning 4996
+#endif
 #include <rttr/registration>
+#ifdef _MSC_VER
+    #pragma warning(pop)
+#endif
 #include <string>
 #include <vector>
 using namespace rttr;
@@ -75,9 +82,9 @@ void fromjson_recursively(const json& json_object,
                 continue;
             }
             const Fundamental::json& json_value = iter.value();
-            variant var                         = prop.get_value(obj);
-            fromjson_recursively(json_value, var, var, option);
-            if (var.is_valid()) prop.set_value(obj, var);
+            variant var_tmp                         = prop.get_value(obj);
+            fromjson_recursively(json_value, var_tmp, var_tmp, option);
+            if (var_tmp.is_valid()) prop.set_value(obj, var_tmp);
         }
     }
 }

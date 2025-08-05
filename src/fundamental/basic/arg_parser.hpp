@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cctype>
+
 #include <getopt.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <iostream>
@@ -336,7 +336,9 @@ template <typename T>
 inline std::string to_lower(
     const T& str_) { // both std::string and std::basic_string_view<char> (for magic_enum) are using to_lower
     std::string str(str_.size(), '\0');
-    std::transform(str_.begin(), str_.end(), str.begin(), ::tolower);
+    std::transform(str_.begin(), str_.end(), str.begin(),
+                   [](char input) -> char { return static_cast<char>(::tolower(input));
+        });
     return str;
 }
 
@@ -356,7 +358,7 @@ inline int from_string(const std::string& v) {
 }
 template <>
 inline short from_string(const std::string& v) {
-    return std::stoi(v);
+    return static_cast<short>(std::stoi(v));
 }
 template <>
 inline long from_string(const std::string& v) {
@@ -387,11 +389,11 @@ inline unsigned char from_string(const std::string& v) {
 }
 template <>
 inline unsigned int from_string(const std::string& v) {
-    return std::stoul(v);
+    return static_cast<unsigned int>(std::stoul(v));
 }
 template <>
 inline unsigned short from_string(const std::string& v) {
-    return std::stoul(v);
+    return static_cast<unsigned short>(std::stoul(v));
 }
 template <>
 inline unsigned long from_string(const std::string& v) {

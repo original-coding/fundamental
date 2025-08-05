@@ -80,7 +80,7 @@ void ThreadPool::Spawn(int count) {
         config_.max_threads_limit > 0 ? static_cast<std::int32_t>(config_.max_threads_limit - m_workers.size()) : count;
     count = count > left_threads ? left_threads : count;
     if (m_workers.size() + count < config_.min_work_threads_num) {
-        count += config_.min_work_threads_num - m_workers.size();
+        count += static_cast<decltype(count)>(config_.min_work_threads_num - m_workers.size());
     }
     if (count == 0) return;
 
@@ -179,7 +179,7 @@ void ThreadPool::Run(std::size_t index) {
 void ThreadPool::PrepareWorkers(std::size_t current_task_nums) {
     if (!config_.enable_auto_scaling) return;
     auto pending_wait_size = waiting_threads.load();
-    if (pending_wait_size < current_task_nums) Spawn(current_task_nums - pending_wait_size);
+    if (pending_wait_size < current_task_nums) Spawn(static_cast<std::int32_t>(current_task_nums - pending_wait_size));
 }
 
 bool ThreadPool::RunOne(std::int64_t idle_wait_time_ms, bool& is_timeout) {

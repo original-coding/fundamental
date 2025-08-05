@@ -33,15 +33,15 @@ public:
         details__ = other.details__;
         return *this;
     }
-    error_code& operator=(error_code&& other) {
+    error_code& operator=(error_code&& other)noexcept {
         assign(other.value(), other.category());
         other.clear();
         details__ = std::move(other.details__);
         return *this;
     }
 
-    decltype(auto) make_excepiton() const {
-        return std::system_error(*this, details__);
+    decltype(auto) make_excepiton() const noexcept {
+        return std::system_error(*static_cast<const std::error_code *>(this), details__);
     }
     decltype(auto) make_exception_ptr() const {
         return std::make_exception_ptr(make_excepiton());

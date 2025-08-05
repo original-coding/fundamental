@@ -86,7 +86,7 @@ private:
     void do_ssl_handshake(const char* preread_data, std::size_t read_len) {
         // handle ssl
 #ifndef NETWORK_DISABLE_SSL
-        auto self   = this->shared_from_this();
+        auto self   = shared_from_this();
         ssl_stream_ = std::make_unique<asio::ssl::stream<asio::ip::tcp::socket&>>(socket_, *ssl_context_ref);
 
         ssl_stream_->async_handshake(asio::ssl::stream_base::server, asio::const_buffer(preread_data, read_len),
@@ -105,7 +105,7 @@ private:
 #endif
     }
     void ssl_handshake() {
-        auto self(this->shared_from_this());
+        auto self(shared_from_this());
         asio::async_read(socket_, asio::buffer(request_.buffer_.data(), kSslPreReadSize),
                          [this, self](asio::error_code ec, std::size_t length) {
                              if (!reference_.is_valid()) {
@@ -182,7 +182,7 @@ private:
             return;
         }
 
-        auto self(this->shared_from_this());
+        auto self(shared_from_this());
         timeout_check_timer_.expires_after(std::chrono::milliseconds(timeout_msec_));
         timeout_check_timer_.async_wait([this, self](const asio::error_code& ec) {
             if (!reference_.is_valid()) {
@@ -219,7 +219,7 @@ private:
         response_.perform_response();
     }
     void handle_read(std::size_t offset = 0) {
-        auto self(this->shared_from_this());
+        auto self(shared_from_this());
         async_buffer_read_some(
             { asio::mutable_buffer(request_.buffer_.data() + offset, request_.buffer_.size() - offset) },
             [this, offset, self](asio::error_code ec, std::size_t length) {

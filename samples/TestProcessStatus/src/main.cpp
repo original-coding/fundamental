@@ -40,8 +40,12 @@ int main(int argc, char** argv) {
                 FINFO("memory monitor changed for {} msec {}", diff.sampleTimeMsec, dump_info);
                 current.Dump();
             }
+#if TARGET_PLATFORM_LINUX
             // trim memory
             malloc_trim(0);
+#endif // TARGET_PLATFORM_LINUX
+
+            
         });
     };
     auto handle = queue.AddDelayTask(2000, task_func);

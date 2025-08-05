@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
 void TestDefaultLogger() {
 
     Fundamental::Logger::PrintBackTrace();
-    std::size_t kTargetCount = 120;
+    std::size_t kTargetCount = 5;
     while (!Fundamental::Logger::IsDebuggerAttached() && kTargetCount != 0) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         kTargetCount--;

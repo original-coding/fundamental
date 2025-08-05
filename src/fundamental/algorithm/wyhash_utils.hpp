@@ -1,7 +1,9 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#ifndef _MSC_VER
 #include <endian.h>
+#endif
 
 // copy from https://github.com/wangyi-fudan/wyhash.git
 

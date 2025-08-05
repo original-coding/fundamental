@@ -46,7 +46,7 @@ TEST(IntegerCodecTestBool, TestBasic) {
 }
 
 TYPED_TEST(IntegerCodecTest, TestAllNumberType) {
-    auto max_extra_bytes                  = sizeof(TestFixture::kMin);
+    constexpr std::size_t max_extra_bytes                  = sizeof(TestFixture::kMin);
     std::uint8_t src[max_extra_bytes + 1];
     std::memset(src,0,max_extra_bytes + 1);
     using ValueType                       = std::decay_t<decltype(TestFixture::kMin)>;
@@ -55,7 +55,7 @@ TYPED_TEST(IntegerCodecTest, TestAllNumberType) {
         ValueType encode_v = 0;
         for (std::size_t shift = 0; shift < sizeof(ValueType) * 8 - 1; ++shift)
         {
-            encode_v += 1 << shift;
+            encode_v += static_cast <ValueType>(1) << shift;
             auto len           = VarintEncode(encode_v, src);
             ValueType decode_v = 0;
             auto len2          = VarintDecode(decode_v, src);
@@ -65,7 +65,7 @@ TYPED_TEST(IntegerCodecTest, TestAllNumberType) {
         encode_v = 0;
         for (std::size_t shift = 0; shift < sizeof(ValueType) * 8 - 1; ++shift)
         {
-            encode_v += (-1)*std::pow(2,shift);
+            encode_v += static_cast<ValueType>(-1) * static_cast<ValueType>(std::pow(2, shift));
             auto len           = VarintEncode(encode_v, src);
             ValueType decode_v = 0;
 
@@ -131,7 +131,7 @@ TYPED_TEST(IntegerCodecTest, TestAllNumberType) {
         ValueType encode_v = 0;
         for (std::size_t shift = 0; shift < sizeof(ValueType) * 8; ++shift)
         {
-            encode_v += 1 << shift;
+            encode_v += static_cast <ValueType>(1) << shift;
             auto len = VarintEncode(encode_v, src);
 
             ValueType decode_v = 0;

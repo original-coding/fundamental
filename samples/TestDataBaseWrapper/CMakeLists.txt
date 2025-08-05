@@ -28,6 +28,10 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${file_resources})
 # Create the executable
 add_executable(${app_target_name} "${file_source}" "${file_resources}")
 
+set_target_properties(${app_target_name} PROPERTIES
+    FOLDER ${samples_dir_name}
+)
+
 if(MSVC)
     set_property(TARGET ${app_target_name} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR})
 endif()

@@ -24,7 +24,7 @@ void LockFreeQueueSigleThread(benchmark::State& state) {
 }
 
 void LockSigleThread(benchmark::State& state) {
-    Fundamental::QueueMPSC<std::size_t> q(31);
+    Fundamental::QueueMPSC<std::size_t> q(true);
     std::size_t t = 0;
     for (auto _ : state) {
         q.Push(t);

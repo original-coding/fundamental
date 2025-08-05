@@ -6,6 +6,9 @@
 #include <gtest/gtest.h>
 #include <list>
 #include <vector>
+#if TARGET_PLATFORM_WINDOWS
+#include <windows.h>
+#endif
 namespace
 {
 struct TestParallel : public ::testing::Test
@@ -13,7 +16,11 @@ struct TestParallel : public ::testing::Test
 protected:
     void SetUp() override
     {
+#if TARGET_PLATFORM_WINDOWS
+        SetEnvironmentVariableA("F_PARALLEL_THREADS", std::to_string(std::thread::hardware_concurrency() - 1).c_str());
+#else
         ::setenv("F_PARALLEL_THREADS", std::to_string(std::thread::hardware_concurrency() - 1).c_str(), 1);
+#endif
     }
 };
 } // namespace
@@ -25,7 +32,7 @@ TEST_F(TestParallel, TestVecAccess)
     std::size_t sum = (0 + 999) * 1000 / 2;
     for (std::size_t i = 0; i < 1000; ++i)
     {
-        nums[i] = i;
+        nums[i] = static_cast<std::int32_t>(i);
     }
     std::atomic<std::size_t> pSum { 0 };
     Fundamental::ParallelRun(
@@ -51,7 +58,7 @@ TEST_F(TestParallel, TestListAccess)
     std::size_t sum = (0 + 999) * 1000 / 2;
     for (std::size_t i = 0; i < 1000; ++i)
     {
-        *iter = i;
+        *iter = static_cast<std::int32_t>(i);
         ++iter;
     }
     std::atomic<std::size_t> pSum { 0 };
@@ -101,7 +108,7 @@ TEST_F(TestParallel, TestException)
     nums.resize(1000);
     for (std::size_t i = 0; i < 1000; ++i)
     {
-        nums[i] = i;
+        nums[i] = static_cast<std::int32_t>(i);
     }
     EXPECT_ANY_THROW(Fundamental::ParallelRun(
         nums.begin(), nums.end(), [&](decltype(nums.begin()) begin, std::size_t groupSize, std::size_t groupIndex) {
@@ -116,7 +123,7 @@ TEST_F(TestParallel, TestEnv)
     nums.resize(1000);
     for (std::size_t i = 0; i < 1000; ++i)
     {
-        nums[i] = i;
+        nums[i] = static_cast<std::int32_t>(i);
     }
     Fundamental::ParallelRun(
         nums.begin(), nums.end(), [&](decltype(nums.begin()) begin, std::size_t groupSize, std::size_t groupIndex) {

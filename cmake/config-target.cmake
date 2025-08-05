@@ -26,8 +26,11 @@ add_library(BuildSettings INTERFACE)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "build on linux")
+    set(TARGET_PLATFORM_LINUX TRUE CACHE BOOL "Flag indicating LINUX platform")
     add_definitions(-DTARGET_PLATFORM_LINUX=1)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    message(STATUS "build on windows")
+    set(TARGET_PLATFORM_WINDOWS TRUE CACHE BOOL "Flag indicating Windows platform")
     add_definitions(-DTARGET_PLATFORM_WINDOWS=1)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     add_definitions(-DTARGET_PLATFORM_MAC=1)
@@ -35,8 +38,17 @@ else()
     message(FATAL_ERROR "Unknown platform.")
 endif()
 
-#target_precompile_headers(BuildSettings INTERFACE "${CMAKE_CURRENT_LIST_DIR}/platform.h.in")
-target_compile_options(BuildSettings INTERFACE -include "${CMAKE_CURRENT_LIST_DIR}/platform.h.in")
+
+if(TARGET_PLATFORM_WINDOWS)
+    target_precompile_headers(BuildSettings INTERFACE "${CMAKE_CURRENT_LIST_DIR}/platform.h.in")
+else()
+    target_compile_options(BuildSettings INTERFACE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-include "${CMAKE_CURRENT_LIST_DIR}/platform.h.in"
+        >
+    )
+endif()
+
+
 include(CheckCXXSourceCompiles)
 
 ## 
@@ -67,10 +79,17 @@ endmacro(ADD_COMPILE_DEFINITION)
 ADD_COMPILE_DEFINITION(Debug DEBUG)
 ADD_COMPILE_DEFINITION(Release NDEBUG)
 target_compile_options(BuildSettings INTERFACE
-    "$<$<CONFIG:Debug>:-O0;-Wall;-Wextra;-g2;-ggdb;-fno-omit-frame-pointer>"
-    "$<$<CONFIG:RelWithDebInfo>:-O2;-Wall;-Wextra;-g>"
-    "$<$<CONFIG:Release>:-O3;-Wall;-Wextra>"
-    "-fPIC"
+    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:
+    -fPIC
+    $<$<CONFIG:Debug>:-O0;-Wall;-g2;-ggdb;-fno-omit-frame-pointer>
+    $<$<CONFIG:RelWithDebInfo>:-O2;-Wall;-g>
+    $<$<CONFIG:Release>:-O3;-Wall>
+    >
+    $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>,$<CONFIG:Release>>:
+    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-Wextra>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    >
+    $<$<CXX_COMPILER_ID:MSVC>:/wd4101;/wd4996;/wd4100>
 )
 
 if(F_ENABLE_COMPILE_OPTIMIZE)
@@ -102,7 +121,6 @@ if(F_ENABLE_COMPILE_OPTIMIZE)
         >
         $<$<CXX_COMPILER_ID:MSVC>:
         /Ob2 # 任意适合的内联
-        /inline # 启用内联展开
         >
         >
     )
@@ -130,10 +148,12 @@ endif()
 target_compile_features(BuildSettings INTERFACE
     "cxx_std_17"
 )
-
 target_compile_definitions(BuildSettings INTERFACE
     "$<$<CONFIG:Debug>:VERBOSE_LOGGING=1>"
     "$<$<CONFIG:Release>:OPTIMIZED=1>"
+    $<$<CXX_COMPILER_ID:MSVC>:_WIN32_WINNT=0x0601
+    $<$<CONFIG:Debug>:DEBUG=1>
+    >
 )
 
 if(ENABLE_DEBUG_MEMORY_TRACE)
@@ -157,9 +177,11 @@ target_compile_options(BuildSettings INTERFACE
     -fdata-sections
     >
     >
+    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:
     -Wno-missing-field-initializers
     -Wno-unused-parameter
     -Wno-unused-but-set-parameter
+    >
 )
 
 
@@ -181,16 +203,20 @@ target_link_options(BuildSettings INTERFACE
 
 )
 if(F_ENABLE_COMPILE_OPTIMIZE)
+if(TARGET_PLATFORM_LINUX)
     target_link_options(BuildSettings INTERFACE
         "$<$<CONFIG:RelWithDebInfo>:-Wl,-O2>"
         "$<$<CONFIG:Release>:-Wl,-O3>"
     )
 endif()
+endif()
 
 
 
 target_link_libraries(BuildSettings INTERFACE
-    pthread
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:pthread
+    >
+
 )
 
 if(NOT HAS_STD_FILESYSTEM)
@@ -217,6 +243,9 @@ endfunction()
 
 # enable memory access check for debug mode
 function(config_enable_sanitize_address_check target_name)
+    if(TARGET_PLATFORM_WINDOWS)
+        return()
+    endif()
     if(DISABLE_DEBUG_SANITIZE_ADDRESS_CHECK)
         return()
     endif()
@@ -227,9 +256,6 @@ function(config_enable_sanitize_address_check target_name)
         "$<$<CONFIG:Debug>:-fsanitize=address>"
     )
 
-    target_link_options(${target_name} PRIVATE
-        "$<$<CONFIG:Debug>:-fsanitize=address>"
-    )
     #you shoulde install libasan5 in ubuntu
     target_link_libraries(
         ${target_name} PRIVATE
@@ -240,6 +266,9 @@ endfunction()
 # enable memory profiling check for debug mode
 # export MALLOC_CONF="prof:true,prof_active:true,lg_prof_sample:0,prof_leak:true,prof_accum:true"
 function(config_enable_jemalloc_memory_profiling target_name)
+    if(TARGET_PLATFORM_WINDOWS)
+        return()
+    endif()
     if(NOT ENABLE_JEMALLOC_MEMORY_PROFILING)
         return()
     endif()
@@ -268,6 +297,9 @@ endfunction()
 # run you program to generate gmon.out
 # then  'gprof program gmon.out > analysis.txt'
 function(config_enable_pg_profiling target_name)
+    if(TARGET_PLATFORM_WINDOWS)
+        return()
+    endif()
     target_compile_options(${target_name} PRIVATE "$<$<CONFIG:Debug>:-pg>"
     )
     target_link_options(${target_name} PRIVATE "$<$<CONFIG:Debug>:-pg>"
@@ -276,6 +308,9 @@ endfunction()
 
 #strip all debug info for no debug mode
 function(config_strip_debug_info target_name)
+    if(TARGET_PLATFORM_WINDOWS)
+        return()
+    endif()
     # 检查目标是否为可执行程序
     get_property(target_type TARGET ${target_name} PROPERTY TYPE)
     if(NOT (target_type STREQUAL "EXECUTABLE" OR target_type STREQUAL "SHARED_LIBRARY" OR target_type STREQUAL "MODULE_LIBRARY"))
@@ -287,6 +322,7 @@ function(config_strip_debug_info target_name)
     #     $<$<CXX_COMPILER_ID:MSVC>:/link /RELEASE>
     #     >
     # )
+
     if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug"))
         add_custom_command(TARGET ${target_name} POST_BUILD
             COMMAND ${CMAKE_OBJCOPY} --only-keep-debug $<TARGET_FILE:${target_name}> $<TARGET_FILE:${target_name}>.sym
@@ -353,3 +389,16 @@ function(enable_origin_rpath app_target_name)
     )
 endfunction()
 
+file(GLOB CMAKE_FILES
+    "cmake/*.cmake"
+    "cmake/*.txt"
+    "cmake/*.in"
+)
+
+source_group("local cmake files" FILES ${CMAKE_FILES})
+
+add_custom_target(fundamental_cmake_files SOURCES ${CMAKE_FILES})
+
+set_target_properties(${fundamental_cmake_files} PROPERTIES
+    FOLDER "cmake"
+)

@@ -20,11 +20,19 @@ file(GLOB lib_source
     algorithm/*.h
     algorithm/*.cpp
     algorithm/*.hpp
-    process/*.h
-    process/*.cc
-    process/*.cpp
+
 )
+
+if(TARGET_PLATFORM_LINUX)
+file(GLOB process_source
+process/*.h
+process/*.cc
+process/*.cpp
+)
+list(APPEND lib_source ${process_source})
+endif()
 set(extra_libs)
+set(extra_compile_options)
 #prepare rttr
 if(FUNDAMENTAL_BUILD_RTTR)
     file(GLOB rttr_source
@@ -37,6 +45,9 @@ if(FUNDAMENTAL_BUILD_RTTR)
     if(FUNDAMENTAL_ENABLE_SCRIPT_SUPPORT)
         list(APPEND extra_libs chaiscript)
     endif()
+if(TARGET_PLATFORM_WINDOWS)
+    list(APPEND extra_compile_options /bigobj)
+endif()
 endif()
 
 if(FUNDAMENTAL_BUILD_EVENTS)
@@ -56,12 +67,18 @@ if(FUNDAMENTAL_BUILD_EVENTS)
     list(APPEND extra_libs eventpp)
 endif()
 
+if(TARGET_PLATFORM_WINDOWS)
+message(STATUS "use wingetopt to replace getopt")
+list(APPEND extra_libs wingetopt)
+endif()
+
 
 
 # Add to source group, TREE will enable cmake to config the folder layout automatically
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lib_source})
 
 add_library(${lib_name}_property INTERFACE)
+
 
 target_include_directories(${lib_name}_property INTERFACE
     ${src_root_dir}
@@ -76,9 +93,17 @@ target_link_libraries(${lib_name}_property INTERFACE
 )
 
 
+target_compile_options(${lib_name}_property INTERFACE
+    ${extra_compile_options}
+)
+
 if(F_BUILD_STATIC)
     # Create the static library
     add_library(${lib_name}${STATIC_LIB_SUFFIX} STATIC ${lib_source})
+    set_target_properties(${lib_name}${STATIC_LIB_SUFFIX} PROPERTIES
+        FOLDER ${src_root_dir_name}
+    )
+
     config_enable_jemalloc_memory_profiling(${lib_name}${STATIC_LIB_SUFFIX})
     config_disable_rtti(${lib_name}${STATIC_LIB_SUFFIX})
     # Config link dependencies
@@ -87,14 +112,14 @@ if(F_BUILD_STATIC)
         ${lib_name}_property
     )
     add_library(${GLOB_NAMESPACE}${lib_name}${STATIC_LIB_SUFFIX} ALIAS ${lib_name}${STATIC_LIB_SUFFIX})
-    set_target_properties(${lib_name}${STATIC_LIB_SUFFIX} PROPERTIES
-        FOLDER ${src_root_dir}
-    )
 endif()
 
 if(F_BUILD_SHARED)
     # Create the shared library
     add_library(${lib_name} SHARED ${lib_source})
+    set_target_properties(${lib_name}$ PROPERTIES
+        FOLDER ${src_root_dir_name}
+    )
     config_enable_jemalloc_memory_profiling(${lib_name})
     config_disable_rtti(${lib_name})
     config_enable_sanitize_address_check(${lib_name})
@@ -105,9 +130,6 @@ if(F_BUILD_SHARED)
     )
 
     add_library(${GLOB_NAMESPACE}${lib_name} ALIAS ${lib_name})
-    set_target_properties(${lib_name} PROPERTIES
-        FOLDER ${src_root_dir}
-    )
 endif()
 
 

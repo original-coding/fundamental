@@ -1,4 +1,6 @@
 set(src_root_dir ${CMAKE_CURRENT_SOURCE_DIR})
+get_filename_component(src_root_dir_name ${src_root_dir} NAME)
+
 add_subdirectory(fundamental)
 if(FUNDAMENTAL_BUILD_NETWORK)
     add_subdirectory(network)
