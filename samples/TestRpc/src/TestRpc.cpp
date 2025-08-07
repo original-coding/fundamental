@@ -11,6 +11,7 @@
 
 #include "fundamental/application/application.hpp"
 #include "fundamental/basic/random_generator.hpp"
+#include "rpc/proxy/proxy_manager.hpp"
 
 #include "rpc/rpc_client.hpp"
 #include <chrono>
@@ -29,6 +30,15 @@ decltype(auto) gen_pipe_proxy() {
     forward_request.dst_service = ws_dst_port ? ws_dst_port : "9000";
     forward_request.route_path  = "/ws_proxy";
     forward_request.ssl_option  = forward::forward_required_option;
+    return proxy::pipe_connection_upgrade::make_shared(forward_request);
+}
+decltype(auto) gen_pipe_add_server_proxy(const std::string& path) {
+    forward::forward_request_context forward_request;
+    forward_request.dst_host         = "127.0.0.1";
+    forward_request.dst_service      = "9000";
+    forward_request.route_path       = path;
+    forward_request.ssl_option       = forward::forward_required_option;
+    forward_request.forward_protocal = forward::forward_add_server;
     return proxy::pipe_connection_upgrade::make_shared(forward_request);
 }
 #if 1
@@ -1192,8 +1202,10 @@ TEST(rpc_test, test_void_stream) {
 }
 TEST(rpc_test, test_proxy_list) {
     auto client = network::make_guard<rpc_client>("127.0.0.1", "9000");
+     // add server test
+    client->append_proxy(gen_pipe_add_server_proxy("/ws_proxy_dynamic"));
     client->append_proxy(gen_pipe_proxy());
-    auto ws_upgrade = proxy::ws_upgrade_imp::make_shared("/ws_proxy", "127.0.0.1");
+    auto ws_upgrade = proxy::ws_upgrade_imp::make_shared("/ws_proxy_dynamic", "127.0.0.1");
     client->append_proxy(ws_upgrade);
     auto socks5_proxy = SocksV5::socks5_proxy_imp::make_shared("127.0.0.1", 9000, "", "");
     client->append_proxy(socks5_proxy);

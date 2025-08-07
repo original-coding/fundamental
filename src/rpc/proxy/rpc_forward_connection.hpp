@@ -45,7 +45,7 @@ protected:
     // This function will be called after a successful proxy connection or SSL handshake.
     virtual void StartForward();
     void enable_ssl(network_client_ssl_config client_ssl_config);
-
+    
 protected:
     void StartDnsResolve(const std::string& host, const std::string& service);
     void StartConnect(asio::ip::tcp::resolver::results_type&& result);
@@ -53,7 +53,7 @@ protected:
     void StartClientRead();
     void StartClient2ServerWrite();
     void StartServerRead();
-
+    void FallBackProtocal();
 protected:
     void ssl_handshake();
     bool proxy_by_ssl();
@@ -127,6 +127,7 @@ protected:
     std::string proxy_service;
     /// Socket for the connection.
     std::shared_ptr<rpc_service::connection> upstream;
+    const asio::any_io_executor& ref_executor_;
     //
     asio::ip::tcp::socket proxy_socket_;
 #ifndef NETWORK_DISABLE_SSL

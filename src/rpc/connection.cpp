@@ -3,6 +3,7 @@
 #include "proxy/socks5/socks5_session.h"
 #include "proxy/transparent_proxy_connection.hpp"
 #include "proxy/websocket/ws_forward_connection.hpp"
+#include "rpc/proxy/proxy_manager.hpp"
 #include "rpc_server.hpp"
 
 namespace network
@@ -76,20 +77,25 @@ void connection::process_ws_request(std::size_t preread_len) {
         }
         // std::tuple<bool, std::string, std::string>(std::string)
         auto query_func =
-            [this, ptr = shared_from_this()](const std::string& api) -> std::tuple<bool, std::string, std::string> {
+            [this, ptr = shared_from_this()](
+                const std::string& api) -> std::tuple<bool, std::string, std::string, Fundamental::ScopeGuard> {
             bool ret = false;
             std::string dst_host;
             std::string dst_service;
+            Fundamental::ScopeGuard release_guard;
             do {
                 if (!proxy_manager_) break;
-                proxy::ProxyHost host;
-                ret = proxy_manager_->GetWsProxyRoute(api, host);
-                host.update();
-                dst_host    = host.host;
-                dst_service = host.service;
+                auto host = proxy_manager_->GetWsProxyRoute(api);
+                if (!host) break;
+                ret         = true;
+                dst_host    = host->host;
+                dst_service = host->service;
+                // ref
+                release_guard.reset([host]() {});
             } while (0);
-            return std::make_tuple(ret, dst_host, dst_service);
+            return std::make_tuple(ret, dst_host, dst_service, std::move(release_guard));
         };
+
         auto ret = network::proxy::websocket_forward_connection::make_shared(shared_from_this(), query_func,
                                                                              std::string(head_, head_ + preread_len));
         // release proxy connection when server was released
@@ -139,6 +145,18 @@ void connection::process_pipe_connection(std::size_t preread_len) {
         }
         auto ret = network::proxy::protocal_pipe_connection::make_shared(
             shared_from_this(), external_config.forward_config, std::string(head_, head_ + preread_len));
+        if (proxy_manager_) {
+            ret->set_add_route_entry_function(
+                [server_manager = proxy_manager_](std::string route, std::string host,
+                                                  std::string service) mutable -> std::tuple<bool, std::string> {
+                    network::proxy::ProxyHost proxy_host;
+                    proxy_host.host                     = host;
+                    proxy_host.service                  = service;
+                    proxy_host.enable_cache_auto_remove = true;
+                    server_manager->AddWsProxyRoute(route, std::move(proxy_host));
+                    return std::make_tuple(true, "");
+                });
+        }
         // release proxy connection when server was released
         auto release_handle = server->reference_.notify_release.Connect([con = ret->weak_from_this()]() {
             auto ptr = con.lock();

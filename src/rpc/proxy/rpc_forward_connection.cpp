@@ -7,7 +7,7 @@ namespace proxy
 {
 rpc_forward_connection::rpc_forward_connection(std::shared_ptr<rpc_service::connection> ref_connection,
                                                std::string pre_read_data) :
-upstream(ref_connection), proxy_socket_(ref_connection->executor_), resolver(ref_connection->executor_),
+upstream(ref_connection), ref_executor_(upstream->executor_), proxy_socket_(ref_executor_), resolver(ref_executor_),
 cachePool(Fundamental::MakePoolMemorySource()), client2server(cachePool), server2client(cachePool) {
 #ifdef RPC_VERBOSE
     client2server.tag_ = "client2server";
@@ -41,7 +41,7 @@ rpc_forward_connection::~rpc_forward_connection() {
 
 void rpc_forward_connection::release_obj() {
     reference_.release();
-    asio::post(upstream->executor_, [this, ref = shared_from_this()] {
+    asio::post(ref_executor_, [this, ref = shared_from_this()] {
         try {
             HandleDisconnect({}, "release_obj");
         } catch (const std::exception& e) {
@@ -57,7 +57,7 @@ void rpc_forward_connection::HandleDisconnect(asio::error_code ec,
     if (closeMask & ClientProxying) {
         if (status & ClientProxying) {
             status &= (~ClientProxying);
-            upstream->release_obj();
+            if (upstream) upstream->release_obj();
 #ifdef RPC_VERBOSE
             if (!callTag.empty()) FDEBUG("{} close proxy remote endpoint", callTag);
 #endif
@@ -264,6 +264,13 @@ void rpc_forward_connection::StartServerRead() {
             }
             StartServerRead();
         });
+}
+
+void rpc_forward_connection::FallBackProtocal() {
+    auto fall_back_stream = std::move(upstream);
+    release_obj();
+    FDEBUG("fallback to raw rpc protocal");
+    fall_back_stream->probe_protocal();
 }
 
 void rpc_forward_connection::ssl_handshake() {

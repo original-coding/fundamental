@@ -12,7 +12,7 @@ websocket_forward_connection::websocket_forward_connection(std::shared_ptr<rpc_s
 rpc_forward_connection(ref_connection, std::move(pre_read_data)), route_query_f(query_func) {
 }
 void websocket_forward_connection::process_protocal() {
-    auto read_buffer        = client2server.GetWriteBuffer();
+    auto read_buffer                = client2server.GetWriteBuffer();
     auto [status_current, peek_len] = parse_context.parse(read_buffer.data(), read_buffer.size());
     do {
         if (status_current == websocket::http_handler_context::parse_status::parse_failed) break;
@@ -99,10 +99,11 @@ void websocket_forward_connection::start_ws_proxy() {
             ws_key = iter->second;
         }
         if (route_query_f) {
-            auto [has_found, query_host, query_service] = route_query_f(parse_context.head2);
+            auto [has_found, query_host, query_service, guard] = route_query_f(parse_context.head2);
             if (has_found) {
                 proxy_host    = query_host;
                 proxy_service = query_service;
+                release_gurad = std::move(guard);
             }
         }
         if (proxy_host.empty() || proxy_service.empty()) {

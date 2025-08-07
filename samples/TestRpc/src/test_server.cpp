@@ -394,6 +394,7 @@ void server_task(std::promise<void>& sync_p) {
         auto& manager = s_manager;
         manager.AddWsProxyRoute("/ws_proxy_baidu", proxy::ProxyHost { "www.baidu.com", "http" });
         manager.AddWsProxyRoute("/ws_proxy", proxy::ProxyHost { "127.0.0.1", "9000" });
+        manager.AddWsProxyRoute("/ws_remove_test", proxy::ProxyHost { "www.baidu.com", "http" ,nullptr,true});
     }
     server.enable_data_proxy(&s_manager);
     server.enable_socks5_proxy(SocksV5::Sock5Handler::make_default_handler());
