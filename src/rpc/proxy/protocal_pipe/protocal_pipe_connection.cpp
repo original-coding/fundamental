@@ -72,31 +72,42 @@ void protocal_pipe_connection::start_pipe_proxy_handler() {
     response_context.msg  = "failed";
 
     Fundamental::ScopeGuard response_guard([&]() {
+        if (response_context.code != response_context.kSuccessCode) {
+            FWARN("fail to setup pipe {}", response_context.msg);
+        }
         //
         auto [enc_success, enc_ret] = response_context.encode();
         if (!enc_success) {
-            FDEBUG("{} enc response failed");
+            FDEBUG("enc response failed");
             return;
         }
         auto response_data = std::make_shared<std::string>(enc_ret);
         forward_async_write_buffers(asio::const_buffer { response_data->data(), response_data->size() },
                                     [this, self = shared_from_this(), response_data,
-                                     b_success = response_context.code == response_context.kSuccessCode](
+                                     need_more_phase = response_context.code == response_context.kSuccessCode](
                                         std::error_code ec, std::size_t bytesRead) {
-                                        if (!reference_.is_valid()) {
+                                        if (!reference_.is_valid() || !need_more_phase) {
                                             return;
                                         }
-                                        if (b_success) StartProtocal();
+                                        if (need_forward_phase()) {
+                                            StartProtocal();
+                                            return;
+                                        }
+                                        if (need_fallback()) {
+                                            handle_fallback();
+                                        }
                                     });
     });
 
     do {
         if (request_context.dst_host.empty() || request_context.dst_service.empty()) {
-            FWARN("invalied forward host information");
+            response_context.msg = "invalid forward host information";
             break;
         }
-        if (request_context.forward_protocal == forward::forward_websocket && request_context.route_path.empty()) {
-            FWARN("websocker forward need a valid route path");
+        if (!verify_protocal_request_param(response_context)) {
+            break;
+        }
+        if (!handle_none_forward_phase_protocal(response_context)) {
             break;
         }
         proxy_host    = request_context.dst_host;
@@ -123,6 +134,71 @@ void protocal_pipe_connection::start_pipe_proxy_handler() {
         response_context.msg  = "success";
     } while (0);
 }
+bool protocal_pipe_connection::verify_protocal_request_param(forward::forward_response_context& response_context) {
+    switch (request_context.forward_protocal) {
+    case forward::forward_websocket: {
+        if (request_context.route_path.empty()) {
+            response_context.msg = "websocker forward need a valid route path";
+            return false;
+        }
+        break;
+    }
+    case forward::forward_add_server: {
+        if (request_context.route_path.empty()) {
+            response_context.msg = "add server need a valid route path";
+            return false;
+        }
+        break;
+    }
+    default: break;
+    }
+    return true;
+}
+
+bool protocal_pipe_connection::handle_none_forward_phase_protocal(forward::forward_response_context& response_context) {
+    switch (request_context.forward_protocal) {
+    case forward::forward_add_server: {
+        if (!add_server_handler) {
+            response_context.msg = "no handlers has been set";
+            return false;
+        }
+        auto [ret, reason] =
+            add_server_handler(request_context.route_path, request_context.dst_host, request_context.dst_service);
+        if (!ret) {
+            response_context.msg = std::string("add server failed for reason:") + reason;
+            return false;
+        }
+        FINFO("add server success {} -> {}:{}", request_context.route_path, request_context.dst_host,
+              request_context.dst_service);
+        break;
+    }
+    default: break;
+    }
+    return true;
+}
+
+bool protocal_pipe_connection::need_forward_phase() const {
+    switch (request_context.forward_protocal) {
+    case forward::forward_protocal_num:
+    case forward::forward_add_server: {
+        return false;
+    }
+    default: return true;
+    }
+}
+bool protocal_pipe_connection::need_fallback() const {
+    switch (request_context.forward_protocal) {
+    case forward::forward_add_server: {
+        return true;
+    }
+    default: return false;
+    }
+}
+
+void protocal_pipe_connection::handle_fallback() {
+    FallBackProtocal();
+}
+
 void protocal_pipe_connection::process_socks5_proxy() {
     std::uint16_t port = 0;
     try {
@@ -258,6 +334,7 @@ void protocal_pipe_connection::process_ws_proxy() {
     ws_upgrade->init(read_callback, write_callback, finish_callback, nullptr);
     ws_upgrade->start();
 }
+
 void protocal_pipe_connection::do_pipe_proxy() {
     StartClientRead();
     rpc_forward_connection::StartForward();

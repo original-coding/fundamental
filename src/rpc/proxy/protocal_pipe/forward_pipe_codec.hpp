@@ -29,6 +29,7 @@ enum forward_protocal_t
 {
     forward_raw,
     forward_websocket,
+    forward_add_server,
     forward_protocal_num,
 };
 //(total_len_str)(key)#(value_len_str)(value)(key)#(value_len_str)...
@@ -48,8 +49,8 @@ struct forward_context_interface {
         }
         return map;
     }();
-    inline static constexpr std::array<const char*, forward_protocal_num> kForwardProtocalArray      = { "raw",
-                                                                                                         "websocket" };
+    inline static constexpr std::array<const char*, forward_protocal_num> kForwardProtocalArray = { "raw", "websocket",
+                                                                                                    "add_server" };
     inline static const std::unordered_map<std::string_view, forward_protocal_t> kForwardProtocalMap = []() {
         std::unordered_map<std::string_view, forward_protocal_t> map;
         for (std::size_t i = 0; i < kForwardProtocalArray.size(); ++i) {
@@ -319,7 +320,7 @@ struct forward_request_context : forward_context_interface {
 
 struct forward_response_context : forward_context_interface {
     constexpr static std::int32_t kSuccessCode = 0;
-    constexpr static std::int32_t kFailedCode = 1;
+    constexpr static std::int32_t kFailedCode  = 1;
     enum value_array_t : std::uint8_t
     {
         code_v,
