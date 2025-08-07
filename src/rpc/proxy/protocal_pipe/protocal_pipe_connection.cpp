@@ -91,8 +91,12 @@ void protocal_pipe_connection::start_pipe_proxy_handler() {
     });
 
     do {
-        if (request_context.dst_host.empty() || request_context.dst_service.empty() ||
-            request_context.route_path.empty()) {
+        if (request_context.dst_host.empty() || request_context.dst_service.empty()) {
+            FWARN("invalied forward host information");
+            break;
+        }
+        if (request_context.forward_protocal == forward::forward_websocket && request_context.route_path.empty()) {
+            FWARN("websocker forward need a valid route path");
             break;
         }
         proxy_host    = request_context.dst_host;

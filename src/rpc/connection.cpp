@@ -76,20 +76,24 @@ void connection::process_ws_request(std::size_t preread_len) {
         }
         // std::tuple<bool, std::string, std::string>(std::string)
         auto query_func =
-            [this, ptr = shared_from_this()](const std::string& api) -> std::tuple<bool, std::string, std::string> {
+            [this, ptr = shared_from_this()](const std::string& api) -> std::tuple<bool, std::string, std::string,Fundamental::ScopeGuard> {
             bool ret = false;
             std::string dst_host;
             std::string dst_service;
+            Fundamental::ScopeGuard release_guard;
             do {
                 if (!proxy_manager_) break;
-                proxy::ProxyHost host;
-                ret = proxy_manager_->GetWsProxyRoute(api, host);
-                host.update();
-                dst_host    = host.host;
-                dst_service = host.service;
+                auto host = proxy_manager_->GetWsProxyRoute(api);
+                if(!host)break;
+                ret=true;
+                dst_host    = host->host;
+                dst_service = host->service;
+                //ref 
+                release_guard.reset([host](){});
             } while (0);
-            return std::make_tuple(ret, dst_host, dst_service);
+            return std::make_tuple(ret, dst_host, dst_service,std::move(release_guard));
         };
+        
         auto ret = network::proxy::websocket_forward_connection::make_shared(shared_from_this(), query_func,
                                                                              std::string(head_, head_ + preread_len));
         // release proxy connection when server was released

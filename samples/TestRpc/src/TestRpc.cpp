@@ -11,6 +11,7 @@
 
 #include "fundamental/application/application.hpp"
 #include "fundamental/basic/random_generator.hpp"
+#include "rpc/proxy/proxy_manager.hpp"
 
 #include "rpc/rpc_client.hpp"
 #include <chrono>

@@ -3,10 +3,10 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <memory>
 
 #define F_UNUSED(x) (void)x
 
@@ -30,6 +30,7 @@ struct NonMovable {
 
 using BasicTaskFunctionT = std::function<void()>;
 struct ScopeGuard final : NonCopyable {
+    ScopeGuard() = default;
     ScopeGuard(const BasicTaskFunctionT& _f, const BasicTaskFunctionT& initF = nullptr) : f(_f) {
         if (initF) initF();
     }
