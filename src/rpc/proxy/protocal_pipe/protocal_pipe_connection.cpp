@@ -159,7 +159,7 @@ bool protocal_pipe_connection::handle_none_forward_phase_protocal(forward::forwa
     switch (request_context.forward_protocal) {
     case forward::forward_add_server: {
         if (!add_server_handler) {
-            response_context.msg = "no handlers has been set";
+            response_context.msg = "no add server handlers has been set";
             return false;
         }
         auto [ret, reason] =
