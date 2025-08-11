@@ -14,7 +14,8 @@ namespace websocket
 {
 
 std::string ws_utils::generateSessionKey(void* ptr) {
-    auto md5_str = Fundamental::CryptMD5(ptr, sizeof(ptr));
+    auto value=reinterpret_cast <std::intptr_t>(ptr);
+    auto md5_str = Fundamental::CryptMD5(&value, sizeof(value));
     return Fundamental::Base64Encode(md5_str.data(), md5_str.size());
 }
 
