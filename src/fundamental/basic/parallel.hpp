@@ -1,22 +1,18 @@
 #pragma once
-#include "fundamental/thread_pool/thread_pool.h"
 #include <algorithm>
+#include <future>
 #include <vector>
-namespace Fundamental {
 
-namespace internal {
-/// @brief we can change parallel thread pool workthreads nums by set ENV "F_PARALLEL_THREADS=xxx"
-void _InitThreadPool();
+namespace Fundamental
+{
 
-inline decltype(auto) GetParallelThreadPool() {
-    return ThreadPool::PrallelTaskPool();
-}
-
-} // namespace internal
-
-inline std::size_t GetParallelWorkerNums() {
-    return internal::GetParallelThreadPool().Count();
-}
+struct DefaultParallelExecutor {
+    DefaultParallelExecutor() = default;
+    template <typename Callable, typename... Args>
+    auto execute(Callable&& f, Args&&... args) const -> std::future<std::invoke_result_t<Callable, Args...>> {
+        return std::async(std::forward<Callable>(f), std::forward<Args>(args)...);
+    }
+};
 
 /// @brief parallel process task,it will throw exception
 /// @tparam Iterator iterator type for input datasheet
@@ -25,9 +21,12 @@ inline std::size_t GetParallelWorkerNums() {
 /// @param endIt end iterrator which is reachable for inputIt with + operation
 /// @param f date process function
 /// @param groupSize partition datasheet size
-template <typename Iterator, typename ProcessF>
-inline void ParallelRun(Iterator inputIt, Iterator endIt, ProcessF f, std::size_t groupSize = 1) {
-    internal::_InitThreadPool();
+template <typename Iterator, typename ProcessF, typename Executor = DefaultParallelExecutor>
+inline void ParallelRun(Iterator inputIt,
+                        Iterator endIt,
+                        ProcessF f,
+                        std::size_t groupSize    = 1,
+                        const Executor& executor = Executor {}) {
     std::size_t total_size = 0;
     if constexpr (std::is_integral_v<std::decay_t<Iterator>>) {
         total_size = endIt - inputIt;
@@ -61,9 +60,7 @@ inline void ParallelRun(Iterator inputIt, Iterator endIt, ProcessF f, std::size_
         auto beginIt       = moveIt(inputIt, offset);
         for (std::size_t i = 0; offset < total_size; ++i) {
             auto currentGroupSize = (total_size - offset) > groupSize ? groupSize : (total_size - offset);
-            tasks[i]              = std::move(internal::GetParallelThreadPool()
-                                                  .Enqueue(std::bind(taskFunc, beginIt, currentGroupSize, i + 1))
-                                                  .resultFuture);
+            tasks[i]              = std::move(executor.execute(std::bind(taskFunc, beginIt, currentGroupSize, i + 1)));
             offset += currentGroupSize;
             beginIt = moveIt(beginIt, currentGroupSize);
         }

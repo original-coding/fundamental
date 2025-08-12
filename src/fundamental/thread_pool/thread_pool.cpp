@@ -50,7 +50,6 @@ void ThreadPool::JoinAll() {
     ConsumerPool().Join();
     BlockTimePool().Join();
     LongTimePool().Join();
-    PrallelTaskPool().Join();
     DefaultPool().Join();
 }
 

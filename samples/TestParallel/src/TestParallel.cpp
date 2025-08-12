@@ -2,6 +2,7 @@
 #include "fundamental/basic/log.h"
 #include "fundamental/basic/parallel.hpp"
 #include "fundamental/delay_queue/delay_queue.h"
+#include "fundamental/thread_pool/thread_pool.h"
 #include <cmath>
 #include <gtest/gtest.h>
 #include <list>
@@ -16,15 +17,11 @@ struct TestParallel : public ::testing::Test
 protected:
     void SetUp() override
     {
-#if TARGET_PLATFORM_WINDOWS
-        SetEnvironmentVariableA("F_PARALLEL_THREADS", std::to_string(std::thread::hardware_concurrency() - 1).c_str());
-#else
-        ::setenv("F_PARALLEL_THREADS", std::to_string(std::thread::hardware_concurrency() - 1).c_str(), 1);
-#endif
     }
 };
 } // namespace
 
+Fundamental::ThreadPoolParallelExecutor s_excutor{8};
 TEST_F(TestParallel, TestVecAccess)
 {
     std::vector<std::int32_t> nums;
@@ -46,7 +43,7 @@ TEST_F(TestParallel, TestVecAccess)
             }
             pSum += sum_value;
         },
-        10);
+        10,s_excutor);
     EXPECT_EQ(pSum.load(), sum);
 }
 
@@ -73,7 +70,7 @@ TEST_F(TestParallel, TestListAccess)
             }
             pSum += sum_value;
         },
-        10);
+        10,s_excutor);
     EXPECT_EQ(pSum.load(), sum);
 }
 
@@ -97,7 +94,7 @@ TEST_F(TestParallel, TestRawPtr)
             FDEBUG("sum_value:{} groupSize:{} groupIndex:{}", sum_value, groupSize, groupIndex);
             pSum += sum_value;
         },
-        2);
+        2,s_excutor);
     EXPECT_EQ(pSum.load(), 55);
     delete[] ptr;
 }
@@ -114,7 +111,7 @@ TEST_F(TestParallel, TestException)
         nums.begin(), nums.end(), [&](decltype(nums.begin()) begin, std::size_t groupSize, std::size_t groupIndex) {
             throw std::invalid_argument("test");
         },
-        10));
+        10,s_excutor));
 }
 
 TEST_F(TestParallel, TestEnv)
@@ -129,8 +126,7 @@ TEST_F(TestParallel, TestEnv)
         nums.begin(), nums.end(), [&](decltype(nums.begin()) begin, std::size_t groupSize, std::size_t groupIndex) {
 
         },
-        10);
-    EXPECT_GE(std::thread::hardware_concurrency() - 1, Fundamental::GetParallelWorkerNums());
+        10,s_excutor);
 }
 
 TEST_F(TestParallel, BenchMark)
@@ -151,14 +147,14 @@ TEST_F(TestParallel, BenchMark)
     t.Reset();
     Fundamental::ParallelRun(
         (std::size_t)0, calcNums, sum,
-        calcNums);
+        calcNums,s_excutor);
     result.exchange(0.0);
     auto costTime = t.GetDuration<Fundamental::Timer::TimeScale::Millisecond>();
     FDEBUG("run for total:{} groupsize:{} cost {}[ms]", calcNums, calcNums, costTime);
     t.Reset();
     Fundamental::ParallelRun(
         (std::size_t)0, calcNums, sum,
-        calcNums / 10);
+        calcNums / 10,s_excutor);
     result.exchange(0.0);
     auto costTime2 = t.GetDuration<Fundamental::Timer::TimeScale::Millisecond>();
     FDEBUG("run for total:{} groupsize:{} cost {}[ms]", calcNums, calcNums / 10, costTime2);
