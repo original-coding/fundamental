@@ -39,9 +39,8 @@ enum ThreadPoolType : std::int32_t
     ShortTimeThreadPool = 0, // reserve at least one thread to recycle glocbal resources
     LongTimeThreadPool  = 1,
     BlockTimeThreadPool = 2, // has no thread nums limit
-    PrallelThreadPool   = 3, // init with external config
-    ProducerThreadPool  = 4,
-    ConsumerThreadPool  = 5
+    ProducerThreadPool  = 3,
+    ConsumerThreadPool  = 4
 };
 
 enum ThreadPoolTaskStatus : std::uint32_t
@@ -77,7 +76,10 @@ struct ThreadPoolConfig {
     std::size_t min_work_threads_num = 0;
     std::int64_t ilde_wait_time_ms   = kDefaultIdleWaitTimeMsec;
 };
+
+struct ThreadPoolParallelExecutor;
 class ThreadPool final {
+    friend struct ThreadPoolParallelExecutor;
     struct ExecutorBase {
         virtual ~ExecutorBase() = default;
         virtual void execute() const {
@@ -126,9 +128,6 @@ public:
         } else if constexpr (Index == BlockTimeThreadPool || Index == LongTimeThreadPool) {
             static ThreadPool* instance = new ThreadPool(0, 0, Index);
             return *instance;
-        } else if constexpr (Index == PrallelThreadPool) {
-            static ThreadPool* instance = new ThreadPool(Index);
-            return *instance;
         } else {
             static ThreadPool* instance = new ThreadPool(0, ThreadPoolConfig::normal_thread_num_limit(), Index);
             return *instance;
@@ -144,9 +143,6 @@ public:
     // has no thread nums limit
     static ThreadPool& BlockTimePool() {
         return Instance<BlockTimeThreadPool>();
-    }
-    static ThreadPool& PrallelTaskPool() {
-        return Instance<PrallelThreadPool>();
     }
     static ThreadPool& ProducerPool() {
         return Instance<ProducerThreadPool>();
@@ -255,6 +251,20 @@ private:
 
     mutable std::mutex m_tasksMutex, m_workersMutex;
     mutable std::condition_variable m_condition, m_task_update_cv;
+};
+
+struct ThreadPoolParallelExecutor {
+    ThreadPoolParallelExecutor() : pool(1, std::thread::hardware_concurrency()) {
+    }
+    ThreadPoolParallelExecutor(std::size_t max_thread_num) : pool(1, max_thread_num) {
+    }
+    template <typename Callable, typename... Args>
+    auto execute(Callable&& f, Args&&... args) const -> std::future<std::invoke_result_t<Callable, Args...>> {
+        return pool.Enqueue(std::forward<Callable>(f), std::forward<Args>(args)...).resultFuture;
+    }
+
+private:
+    mutable ThreadPool pool;
 };
 
 } // namespace Fundamental
