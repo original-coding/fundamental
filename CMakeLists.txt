@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(project_name fh-fundamental)
+set(project_name fundamental)
 project(${project_name} VERSION 0.1 LANGUAGES CXX C)
 
 set(FUNDAMENTAL_MAIN_PROJECT OFF)
