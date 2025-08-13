@@ -1,8 +1,14 @@
 include(CheckCXXCompilerFlag)
 
+
 file(WRITE ${CMAKE_BINARY_DIR}/dummy.cpp "
     #include <ranges>
-        int main() { return 0; } 
+    #include <vector>
+    int main() {
+        std::vector<int> v{1, 2, 3};
+        auto even = v | std::views::filter([](int x){ return x % 2 == 0; });
+        return even.empty() ? 0 : 1;
+    }
 ")
 
 try_compile(
@@ -15,7 +21,7 @@ try_compile(
 )
 
 set(ENV_CXX20_SUPPORTED "${CXX20_SUPPORTED}" CACHE INTERNAL "")
-message(STATUS "ENV_CXX20_SUPPORTED=${ENV_CXX20_SUPPORTED}")
+message(STATUS "ENV_CXX20_SUPPORTED=${ENV_CXX20_SUPPORTED} CXX20_SUPPORTED=${CXX20_SUPPORTED}")
 
 
 include(CheckCXXSourceCompiles)
