@@ -196,9 +196,9 @@ struct ParrallelDeflateContext {
     check_sum_t caculate_check_sum(check_sum_t check, const std::uint8_t* data, std::size_t dataLen) {
         switch (config.check_sum_type) {
         case DeflateCheckSumType::ADLER32_CHECK_T:
-            return static_cast<check_sum_t>(adler32(static_cast<unsigned long>(check), data, dataLen));
+            return static_cast<check_sum_t>(adler32(static_cast<unsigned long>(check), data, static_cast<uInt>(dataLen)));
         case DeflateCheckSumType::CRC32_CHECK_T:
-            return static_cast<check_sum_t>(crc32(static_cast<unsigned long>(check), data, dataLen));
+            return static_cast<check_sum_t>(crc32(static_cast<unsigned long>(check), data, static_cast<uInt>(dataLen)));
         default: return 0;
         }
     }
@@ -314,10 +314,10 @@ inline void ParrallelDeflateContext<executor_t>::process_deflate() {
             if (finish_code != Z_OK) break;
             deflateReset(&strm);
             strm.next_in  = const_cast<std::uint8_t*>(src_buf) + start_offet;
-            strm.avail_in = sub_task_status.input_len;
+            strm.avail_in = static_cast<decltype(strm.avail_in)>(sub_task_status.input_len);
 
             sub_task_status.out_buf.resize(config.GuessCompressLen(sub_task_status.input_len));
-            strm.avail_out = sub_task_status.out_buf.size();
+            strm.avail_out = static_cast<decltype(strm.avail_out)>(sub_task_status.out_buf.size());
             strm.next_out  = sub_task_status.out_buf.data();
             // generate check
             sub_task_status.check =
@@ -381,6 +381,7 @@ inline std::tuple<bool, check_sum_t> ZUtils::ParallelDeflateBinary(const void* s
 
 struct EntryCompressInfo {
     constexpr static std::uint16_t kBasicDecompressNeedVersion = 0x14;
+    constexpr static std::uint32_t kDefaultFilePermission      = static_cast<std::uint32_t>((0100644 << 16) | 0x20);
     // zlib version num
     std::uint16_t compressZipVersion = kBasicDecompressNeedVersion;
     // 8 means deflate 0 means no compress
@@ -388,7 +389,7 @@ struct EntryCompressInfo {
     //
     bool useSpecifiedTimeStamp = false;
     // high 16 bit unix permission low 16 bit dos type
-    std::uint32_t permissions = (0100644 << 16) | 0x20;
+    std::uint32_t permissions = kDefaultFilePermission;
     EntryCompressInfo();
 };
 

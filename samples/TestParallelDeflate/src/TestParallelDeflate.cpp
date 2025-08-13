@@ -109,13 +109,13 @@ TEST(deflate_test, test_basic) {
             writer.AddFile("1", dst_buf.data(), compress_size, zip_data.size(), check_sum);
             writer.AddFile("2/test", dst_buf.data(), compress_size, zip_data.size(), check_sum);
             writer.AddFile("3", dst_buf.data(), compress_size, zip_data.size(), check_sum);
-            auto ret = std::move(writer.Filnalize());
+            auto zip_ret = std::move(writer.Filnalize());
             EXPECT_THROW(writer.AddFile("test2.binary", dst_buf.data(), compress_size, zip_data.size(), check_sum),
                          std::runtime_error);
-            EXPECT_GT(ret.size(), compress_size);
+            EXPECT_GT(zip_ret.size(), compress_size);
             std::fstream out_stream;
             out_stream.open("out.zip", std::ios::binary | std::ios::out);
-            out_stream.write((char*)ret.data(), ret.size());
+            out_stream.write((char*)zip_ret.data(), zip_ret.size());
             EXPECT_TRUE(!out_stream.fail());
         }
     }

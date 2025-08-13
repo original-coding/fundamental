@@ -42,7 +42,7 @@ union type_operation_buffer {
 template <typename T>
 inline constexpr T bswap_internal(T value) noexcept {
     static_assert(std::is_integral_v<T>, "Only integer types are supported");
-    type_operation_buffer<T> input { .v = value };
+    type_operation_buffer<T> input { value };
     type_operation_buffer<T> output  = {};
     constexpr std::size_t kValueSize = sizeof(T);
     for (std::size_t i = 0; i < kValueSize; ++i)
