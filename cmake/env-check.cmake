@@ -1,11 +1,27 @@
 include(CheckCXXCompilerFlag)
 
 
-# 检查编译器是否支持 C++20
-check_cxx_compiler_flag("-std=c++20" ENV_CXX20_SUPPORTED)
-message(STATUS "ENV_CXX20_SUPPORTED=${ENV_CXX20_SUPPORTED}")
-set(ENV_CXX20_SUPPORTED "${ENV_CXX20_SUPPORTED}" CACHE INTERNAL "")
+file(WRITE ${CMAKE_BINARY_DIR}/dummy.cpp "
+    #include <ranges>
+    #include <vector>
+    int main() {
+        std::vector<int> v{1, 2, 3};
+        auto even = v | std::views::filter([](int x){ return x % 2 == 0; });
+        return even.empty() ? 0 : 1;
+    }
+")
 
+try_compile(
+    CXX20_SUPPORTED                
+    ${CMAKE_BINARY_DIR}            
+    SOURCES ${CMAKE_BINARY_DIR}/dummy.cpp
+    CXX_STANDARD 20               
+    CXX_STANDARD_REQUIRED ON    
+    OUTPUT_VARIABLE COMPILE_OUTPUT  
+)
+
+set(ENV_CXX20_SUPPORTED "${CXX20_SUPPORTED}" CACHE INTERNAL "")
+message(STATUS "ENV_CXX20_SUPPORTED=${ENV_CXX20_SUPPORTED} CXX20_SUPPORTED=${CXX20_SUPPORTED}")
 
 
 include(CheckCXXSourceCompiles)
