@@ -1,11 +1,21 @@
 include(CheckCXXCompilerFlag)
 
+file(WRITE ${CMAKE_BINARY_DIR}/dummy.cpp "
+    #include <ranges>
+        int main() { return 0; } 
+")
 
-# 检查编译器是否支持 C++20
-check_cxx_compiler_flag("-std=c++20" ENV_CXX20_SUPPORTED)
+try_compile(
+    CXX20_SUPPORTED                
+    ${CMAKE_BINARY_DIR}            
+    SOURCES ${CMAKE_BINARY_DIR}/dummy.cpp
+    CXX_STANDARD 20               
+    CXX_STANDARD_REQUIRED ON    
+    OUTPUT_VARIABLE COMPILE_OUTPUT  
+)
+
+set(ENV_CXX20_SUPPORTED "${CXX20_SUPPORTED}" CACHE INTERNAL "")
 message(STATUS "ENV_CXX20_SUPPORTED=${ENV_CXX20_SUPPORTED}")
-set(ENV_CXX20_SUPPORTED "${ENV_CXX20_SUPPORTED}" CACHE INTERNAL "")
-
 
 
 include(CheckCXXSourceCompiles)
