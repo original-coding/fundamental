@@ -13,7 +13,17 @@ struct DefaultParallelExecutor {
         return std::async(std::forward<Callable>(f), std::forward<Args>(args)...);
     }
 };
-
+struct ParallelRunEventsHandler {
+    // This callback will be invoked when the number of groups is obtained, passing the group count.
+    std::function<void(std::size_t)> notify_parallel_groups;
+    // This function will be invoked when a group's state is reclaimed by the scheduler thread, executed within the
+    // original scheduling thread's context. The invocation order follows sequential group numbering from group 0
+    // through the final group in ascending order.
+    std::function<void(std::size_t)> notify_subtask_joined;
+    // This function will be called upon completion of a group's execution, invoked directly by the worker thread that
+    // performed the task.
+    std::function<void(std::size_t)> notify_subtask_finished;
+};
 /// @brief parallel process task,it will throw exception
 /// @tparam Iterator iterator type for input datasheet
 /// @tparam ProcessF  with singature void(Iterator input,std::size_t dataSize,std::size_t groupIndex)
@@ -25,8 +35,9 @@ template <typename Iterator, typename ProcessF, typename Executor = DefaultParal
 inline void ParallelRun(Iterator inputIt,
                         Iterator endIt,
                         ProcessF f,
-                        std::size_t groupSize    = 1,
-                        const Executor& executor = Executor {}) {
+                        std::size_t groupSize                          = 1,
+                        const Executor& executor                       = Executor {},
+                        const ParallelRunEventsHandler& events_handler = ParallelRunEventsHandler {}) {
     std::size_t total_size = 0;
     if constexpr (std::is_integral_v<std::decay_t<Iterator>>) {
         total_size = endIt - inputIt;
@@ -34,9 +45,11 @@ inline void ParallelRun(Iterator inputIt,
         total_size = std::abs(std::distance(inputIt, endIt));
     }
     auto groupNums = (total_size + groupSize - 1) / groupSize;
+    if (events_handler.notify_parallel_groups) events_handler.notify_parallel_groups(groupNums);
     std::vector<std::future<void>> tasks;
     auto taskFunc = [&](Iterator begin, std::size_t nums, std::size_t groupIndex) -> void {
         f(begin, nums, groupIndex);
+        if (events_handler.notify_subtask_finished) events_handler.notify_subtask_finished(groupIndex);
     };
     // enqueue into thread pool
     if (groupNums > 1) {
@@ -67,6 +80,7 @@ inline void ParallelRun(Iterator inputIt,
     }
 
     std::exception_ptr eptr;
+    std::size_t current_index = 0;
     try {
         // Run the first task on the current thread directly.
         if (!tasks.empty())
@@ -74,6 +88,7 @@ inline void ParallelRun(Iterator inputIt,
         else {
             taskFunc(inputIt, total_size, 0);
         }
+        if (events_handler.notify_subtask_joined) events_handler.notify_subtask_joined(current_index++);
     } catch (...) {
         eptr = std::current_exception();
     }
@@ -82,6 +97,7 @@ inline void ParallelRun(Iterator inputIt,
     for (auto& item : tasks) {
         try {
             item.get();
+            if (events_handler.notify_subtask_joined) events_handler.notify_subtask_joined(current_index++);
         } catch (...) {
             eptr = std::current_exception();
         }
