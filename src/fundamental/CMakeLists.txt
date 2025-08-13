@@ -84,12 +84,15 @@ target_include_directories(${lib_name}_property INTERFACE
     ${src_root_dir}
 )
 
+find_package(ZLIB REQUIRED) 
+
 # Config link dependencies
 target_link_libraries(${lib_name}_property INTERFACE
     ${extra_libs}
     spdlog
     nlohmann::json
     BuildSettings
+    ZLIB::ZLIB
 )
 
 
