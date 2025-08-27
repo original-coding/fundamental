@@ -209,6 +209,10 @@ struct rudp_client_context_imp {
                          rudp_id_t src_id,
                          std::uint32_t payload,
                          const std::function<void(Fundamental::error_code, rudp_connection_status)>& complete_func);
+    void unique_passive_connect(asio::ip::udp::endpoint sender_endpoint,
+                                rudp_id_t src_id,
+                                std::uint32_t payload,
+                                const std::function<void(Fundamental::error_code)>& complete_func);
     bool is_connected() const;
     bool is_closed() const;
     bool is_active() const;
@@ -283,9 +287,8 @@ struct rudp_server_context_imp {
         asio::io_context& ios;
         std::function<void(rudp_handle_t, Fundamental::error_code)> complete_func;
     };
-    rudp_server_context_imp(rudp_socket* parent, std::size_t max_pending_connections) :
-    socket_ref(parent), max_pending_connections(max_pending_connections) {
-    }
+    rudp_server_context_imp(rudp_socket* parent, std::size_t max_pending_connections);
+    rudp_server_context_imp(rudp_socket* parent, const std::function<void(Fundamental::error_code)>& complete_func);
     ~rudp_server_context_imp() {
 
     };
@@ -293,7 +296,9 @@ struct rudp_server_context_imp {
     [[nodiscard]] Fundamental::error_code listen();
     void async_rudp_accept(asio::io_context& ios,
                            const std::function<void(rudp_handle_t handle, Fundamental::error_code)>& complete_func);
+    void async_rudp_wait_connect(std::size_t max_wait_ms);
     // internal interface
+    void process_wait_connect();
     void peform();
     bool is_listening() const;
     bool filter_data(const void* data, std::size_t data_len);
@@ -307,8 +312,12 @@ struct rudp_server_context_imp {
     void accept_connection();
     //
     rudp_socket* const socket_ref;
+    asio::steady_timer timer;
     const std::size_t max_pending_connections;
-    std::atomic_bool listen_flag = false;
+    std::atomic_bool listen_flag                 = false;
+    std::atomic_bool wait_unique_connection_flag = false;
+    std::function<void(Fundamental::error_code)> wait_unique_connection_cb;
+
     std::unordered_map<asio::ip::udp::endpoint /*remote endpoint*/, std::shared_ptr<rudp_socket>> recv_dic;
     std::list<std::shared_ptr<rudp_socket>> connected_list;
 
@@ -363,6 +372,29 @@ struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
                 }
                 if (!client_context) client_context = std::make_unique<rudp_client_context_imp>(this);
                 client_context->connect(address, port, complete_func);
+            } while (0);
+        });
+    }
+
+    void async_rudp_wait_connect(const std::function<void(Fundamental::error_code)>& complete_func,
+                                 std::size_t max_wait_ms) {
+        asio::post(socket.get_executor(), [this, ref = weak_from_this(), max_wait_ms, complete_func]() {
+            auto strong = ref.lock();
+            do {
+                if (!strong) {
+                    if (complete_func)
+                        complete_func(
+                            error::make_error_code(error::rudp_errors::rudp_failed, "rudp socket has been released"));
+                    break;
+                }
+                if (client_context || server_context) {
+                    if (complete_func)
+                        complete_func(error::make_error_code(error::rudp_errors::rudp_operation_in_progress));
+                    break;
+                }
+                client_context = std::make_unique<rudp_client_context_imp>(this);
+                server_context = std::make_unique<rudp_server_context_imp>(this, complete_func);
+                server_context->async_rudp_wait_connect(max_wait_ms);
             } while (0);
         });
     }
@@ -569,6 +601,18 @@ void async_rudp_connect(rudp_handle_t handle,
     if (complete_func) complete_func(error::make_error_code(error::rudp_errors::rudp_bad_file_descriptor));
 }
 
+void async_rudp_wait_connect(rudp_handle_t handle,
+                             const std::function<void(Fundamental::error_code)>& complete_func,
+                             std::size_t max_wait_ms) {
+    do {
+        auto actual_handle = handle->get();
+        if (!actual_handle || actual_handle->is_closed()) break;
+        actual_handle->async_rudp_wait_connect(complete_func, max_wait_ms);
+        return;
+    } while (0);
+    if (complete_func) complete_func(error::make_error_code(error::rudp_errors::rudp_bad_file_descriptor));
+}
+
 void async_rudp_send(rudp_handle_t handle,
                      const void* buf,
                      std::size_t len,
@@ -656,8 +700,12 @@ void rudp_config(rudp_handle_t handle, rudp_config_type type, std::size_t value)
 Fundamental::error_code rudp_server_context_imp::listen() {
     if (max_pending_connections == 0 || max_pending_connections > 4096)
         return error::make_error_code(error::rudp_errors::rudp_failed, "invalid pending connetions cnt");
+    if (wait_unique_connection_flag.load(std::memory_order::memory_order_seq_cst)) {
+        return error::make_error_code(error::rudp_errors::rudp_failed,
+                                      "invalid listen request on a passive waiting socket");
+    }
     bool expected_value = false;
-    if (listen_flag.compare_exchange_strong(expected_value, true, std::memory_order::memory_order_relaxed)) {
+    if (listen_flag.compare_exchange_strong(expected_value, true, std::memory_order::memory_order_seq_cst)) {
         asio::post(socket_ref->socket.get_executor(), [this, ref = socket_ref->weak_from_this()](
 
                                                       ) {
@@ -668,6 +716,29 @@ Fundamental::error_code rudp_server_context_imp::listen() {
         });
     }
     return Fundamental::error_code();
+}
+
+void rudp_server_context_imp::async_rudp_wait_connect(std::size_t max_wait_ms) {
+    timer.expires_after(std::chrono::milliseconds(max_wait_ms));
+    timer.async_wait([this, ref = socket_ref->weak_from_this(), max_wait_ms](std::error_code ec) {
+        if (ec) return;
+        auto strong = ref.lock();
+        if (!strong) return;
+        socket_ref->destroy(
+            error::make_error_code(error::rudp_errors::rudp_timed_out,
+                                   Fundamental::StringFormat("wait connection timeout for {} ms", max_wait_ms)));
+    });
+    recv_buf.resize(control_frame_data::kRudpControlFrameSize);
+    process_wait_connect();
+}
+
+rudp_server_context_imp::rudp_server_context_imp(rudp_socket* parent, std::size_t max_pending_connections) :
+socket_ref(parent), timer(socket_ref->get_executor()), max_pending_connections(max_pending_connections) {
+}
+rudp_server_context_imp::rudp_server_context_imp(rudp_socket* parent,
+                                                 const std::function<void(Fundamental::error_code)>& complete_func) :
+socket_ref(parent), timer(socket_ref->get_executor()), max_pending_connections(1), wait_unique_connection_flag(true),
+wait_unique_connection_cb(complete_func) {
 }
 
 void rudp_server_context_imp::async_rudp_accept(
@@ -684,6 +755,27 @@ void rudp_server_context_imp::async_rudp_accept(
         accept_list.emplace_back(rudp_accept_session { *p, complete_func });
         accept_connection();
     });
+}
+
+void rudp_server_context_imp::process_wait_connect() {
+    socket_ref->socket.async_receive_from(
+        asio::buffer(recv_buf.data(), recv_buf.size()), sender_endpoint,
+        [this, ref = socket_ref->weak_from_this()](asio::error_code ec, std::size_t len) {
+            auto strong = ref.lock();
+            if (!strong || !wait_unique_connection_flag.load()) return;
+            do {
+                if (ec) break;
+                if (len != control_frame_data::kRudpControlFrameSize) break;
+                if (!last_control_frame.decode(recv_buf.data(), len)) break;
+                if (last_control_frame.command != rudp_command_t::RUDP_SYN_COMMAND) break;
+                timer.cancel();
+                auto complete_func = std::move(wait_unique_connection_cb);
+                socket_ref->client_context->unique_passive_connect(sender_endpoint, last_control_frame.src_id,
+                                                                   last_control_frame.payload, complete_func);
+                return;
+            } while (0);
+            process_wait_connect();
+        });
 }
 
 void network::rudp::rudp_server_context_imp::peform() {
@@ -851,6 +943,7 @@ void rudp_server_context_imp::accept_connection() {
 }
 void rudp_server_context_imp::destroy(Fundamental::error_code ec) {
     listen_flag.exchange(false);
+    wait_unique_connection_flag.exchange(false);
     {
         auto tmp = std::move(recv_dic);
         for (auto& item : tmp) {
@@ -877,6 +970,10 @@ void rudp_server_context_imp::destroy(Fundamental::error_code ec) {
                                                Fundamental::StringFormat("rudp server was released {}", ec)));
         }
     }
+    {
+        auto finish_func = std::move(wait_unique_connection_cb);
+        if (finish_func) finish_func(ec);
+    }
 }
 
 bool rudp_client_context_imp::is_connected() const {
@@ -892,6 +989,7 @@ bool rudp_client_context_imp::is_closed() const {
 }
 
 void rudp_client_context_imp::destroy(Fundamental::error_code e) {
+    FDEBUG("{} destroy client context", socket_ref->id_);
     Fundamental::error_code ec =
         error::make_error_code(error::rudp_errors::rudp_bad_file_descriptor,
                                Fundamental::StringFormat("rudp descriptor was destroy by reason {}", e));
@@ -1002,6 +1100,55 @@ void rudp_client_context_imp::passive_connect(
             socket_ref->mtu_size.set_value(remote_mtu_size);
         }
 
+        socket_read_cache.resize(socket_ref->mtu_size + 32);
+        perform_read();
+    }
+    asio::post(socket_ref->get_executor(), [this, ref = socket_ref->weak_from_this()]() {
+        auto strong = ref.lock();
+        if (!strong) return;
+        send_ack();
+    });
+}
+
+void rudp_client_context_imp::unique_passive_connect(
+    asio::ip::udp::endpoint sender_endpoint,
+    rudp_id_t src_id,
+    std::uint32_t payload,
+    const std::function<void(Fundamental::error_code)>& complete_func) {
+    if (is_closed()) {
+        if (complete_func)
+            complete_func(
+                error::make_error_code(error::rudp_errors::rudp_bad_file_descriptor, "rudp server was released"));
+        return;
+    }
+    if (status == rudp_connection_status::RUDP_INIT_STATUS) { // init
+        std::size_t remote_mtu_size = payload & 0xffffff;
+        std::size_t stream_mode     = (payload >> 24) & 0x1;
+        socket_ref->remote_endpoint = sender_endpoint;
+        remote_id                   = src_id;
+
+        std::error_code ec;
+        // remote bind
+        socket_ref->socket.connect(sender_endpoint, ec);
+        if (ec) {
+            if (complete_func) complete_func(ec);
+            return;
+        }
+        // remote request stream mode but server is not supported
+        if (stream_mode && !socket_ref->stream_mode.current_value) {
+            send_rst();
+            if (complete_func)
+                complete_func(error::make_error_code(error::rudp_errors::rudp_invalid_argument,
+                                                     "rudp server not supported stream mode"));
+            return;
+        }
+        set_status(rudp_connection_status::RUDP_SYN_RECV_STATUS);
+
+        connected_cb = complete_func;
+        // use the smallest mtu for communication
+        if (socket_ref->mtu_size.current_value > remote_mtu_size) {
+            socket_ref->mtu_size.set_value(remote_mtu_size);
+        }
         socket_read_cache.resize(socket_ref->mtu_size + 32);
         perform_read();
     }
@@ -1323,7 +1470,6 @@ void rudp_client_context_imp::perform_read() {
 }
 
 void rudp_client_context_imp::process_read_data(const std::uint8_t* data, std::size_t read_size) {
-    FDEBUG("rudp:{} read {} bytes", socket_ref->id_, read_size);
     if (read_size == control_frame_data::kRudpControlFrameSize) {
         process_control_frame(data);
 
