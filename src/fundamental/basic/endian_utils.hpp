@@ -8,6 +8,7 @@
 #endif
 
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 namespace Fundamental
@@ -58,4 +59,17 @@ inline constexpr std::decay_t<T> host_value_convert(T value) {
         return value;
     }
 }
+
+template <Endian another_endian = Endian::LittleEndian>
+inline void net_buffer_copy(const void* src_buf, void* dst_buf, std::size_t buf_len) noexcept {
+    if constexpr (NeedConvertEndian<another_endian>()) {
+        std::memcpy(dst_buf, src_buf, buf_len);
+    } else {
+        auto p_src_buf = static_cast<const std::uint8_t*>(src_buf);
+        auto p_dst_buf = static_cast<std::uint8_t*>(dst_buf);
+        for (std::size_t i = 0; i < buf_len; ++i)
+            p_dst_buf[i] = p_src_buf[buf_len - 1 - i];
+    }
+}
+
 } // namespace Fundamental
