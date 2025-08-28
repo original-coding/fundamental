@@ -47,9 +47,12 @@ TEST(rudp_test, basic) {
     EXPECT_TRUE(f.valid());
     f.wait();
     send_promise.get_future().wait();
-    rudp_release(server_handler);
-    rudp_release(accept_handle);
-    rudp_release(client_handler);
+    server_handler->destroy();
+    EXPECT_FALSE(*server_handler);
+    accept_handle->destroy();
+    EXPECT_FALSE(*accept_handle);
+    client_handler->destroy();
+    EXPECT_FALSE(*client_handler);
 }
 
 int main(int argc, char** argv) {
