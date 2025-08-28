@@ -23,13 +23,9 @@ public:
     rudp_handle(const rudp_handle& other)            = delete;
     rudp_handle& operator=(const rudp_handle& other) = delete;
 
-    decltype(auto) get() {
-        return socket_;
-    }
-    
-    operator bool() const {
-        return socket_.get();
-    }
+    std::shared_ptr<rudp_socket> get() const;
+
+    operator bool() const;
 
     ~rudp_handle();
 

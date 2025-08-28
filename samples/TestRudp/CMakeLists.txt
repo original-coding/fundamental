@@ -50,6 +50,7 @@ target_link_libraries(${app_target_name}
     PRIVATE
     gtest
 )
+config_enable_sanitize_address_check(${app_target_name})
 if(TARGET_PLATFORM_WINDOWS)
     set(DST_INSTALL_PATH "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
 else()
