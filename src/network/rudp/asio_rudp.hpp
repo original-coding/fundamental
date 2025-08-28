@@ -11,11 +11,37 @@
 namespace network::rudp
 {
 struct rudp_socket;
-using rudp_handle_t = std::weak_ptr<rudp_socket>;
+
+class rudp_handle {
+public:
+    rudp_handle() = default;
+    rudp_handle(std::shared_ptr<rudp_socket> socket);
+
+    rudp_handle& operator=(rudp_handle&& other);
+    rudp_handle(rudp_handle&& other) noexcept;
+
+    rudp_handle(const rudp_handle& other)            = delete;
+    rudp_handle& operator=(const rudp_handle& other) = delete;
+
+    decltype(auto) get() {
+        return socket_;
+    }
+    
+    operator bool() const {
+        return socket_.get();
+    }
+
+    ~rudp_handle();
+
+    void destroy();
+
+private:
+    std::shared_ptr<rudp_socket> socket_;
+};
+
+using rudp_handle_t = std::shared_ptr<rudp_handle>;
 
 rudp_handle_t rudp_create(asio::io_context& ios, Fundamental::error_code& ec);
-
-void rudp_release(rudp_handle_t handle);
 
 void rudp_bind(rudp_handle_t handle, std::uint16_t port, std::string address, Fundamental::error_code& ec);
 
