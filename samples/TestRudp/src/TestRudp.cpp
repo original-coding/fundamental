@@ -167,7 +167,7 @@ TEST(rudp_test, connection_auto_disconnect) {
 }
 #endif
 
-struct rudp_acceptor {
+struct rudp_acceptor : public std::enable_shared_from_this<rudp_acceptor> {
     rudp_acceptor(rudp_handle_t& handle) : rudp_handle(handle) {
     }
 
@@ -179,13 +179,19 @@ struct rudp_acceptor {
     void process_accept() {
         if (!*rudp_handle) return;
         async_rudp_accept(rudp_handle, network::io_context_pool::Instance().get_io_context(),
-                          [this](rudp_handle_t handle, Fundamental::error_code ec) {
-                              if (ec) return;
+                          [this, ref = weak_from_this()](rudp_handle_t handle, Fundamental::error_code ec) {
+                              auto strong = ref.lock();
+                              if (!strong) return;
+                              EXPECT_TRUE(!ec);
+                              if (max_size > 0) {
+                                  --max_size;
+                                  FASSERT(!ec, ec);
+                                  if (cb) cb(handle);
+                              }
                               process_accept();
-                              if (cb) cb(handle);
-                                                    });
+                          });
     }
-
+    std::atomic<std::size_t> max_size = 0;
     rudp_handle_t& rudp_handle;
     std::function<void(rudp_handle_t)> cb;
 };
@@ -193,28 +199,24 @@ struct rudp_acceptor {
 TEST(rudp_test, multi_connection) {
     Fundamental::error_code ec;
     auto server_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
-
     rudp_bind(server_handler, 42000, "", ec);
-    std::size_t max_connections = 10;
+    std::size_t max_connections = 1000;
     rudp_listen(server_handler, max_connections, ec);
+
     std::mutex data_mutex;
     std::list<rudp_handle_t> hande_list;
     std::list<rudp_handle_t> client_hande_list;
-    std::list<std::shared_ptr<std::promise<void>>> send_promises;
     std::list<std::shared_ptr<std::promise<void>>> recv_promises;
 
-    rudp_acceptor acceptor(server_handler);
-    acceptor.start([&data_mutex, &hande_list, &send_promises](rudp_handle_t handle) {
-        std::shared_ptr<std::promise<void>> promise = std::make_shared<std::promise<void>>();
+    auto acceptor                 = std::make_shared<rudp_acceptor>(server_handler);
+    acceptor->max_size            = max_connections;
+    std::atomic<std::int32_t> cnt = 0;
+    acceptor->start([&data_mutex, &hande_list, &cnt](rudp_handle_t handle) {
         {
             std::scoped_lock<std::mutex> locker(data_mutex);
             hande_list.push_back(handle);
-            send_promises.emplace_back(promise);
         }
-        async_rudp_send(handle, "test", 4, [promise](std::size_t, Fundamental::error_code e) {
-            EXPECT_TRUE(!e);
-            promise->set_value();
-        });
+        cnt.fetch_sub(1);
     });
 
     for (std::size_t i = 0; i < max_connections; ++i) {
@@ -225,22 +227,20 @@ TEST(rudp_test, multi_connection) {
         recv_promises.emplace_back(promise);
 
         async_rudp_connect(client_handler, "127.0.0.1", 42000,
-                           [client_handler, promise](Fundamental::error_code e) mutable {
+                           [client_handler, promise, &cnt](Fundamental::error_code e) mutable {
                                EXPECT_TRUE(!e);
-                               auto recv_buf = std::make_shared<std::string>();
-                               recv_buf->resize(4);
-
-                               async_rudp_recv(client_handler, recv_buf->data(), recv_buf->size(),
-                                               [promise, recv_buf](std::size_t, Fundamental::error_code e) mutable {
-                                                   EXPECT_TRUE(!e);
-                                                   promise->set_value();
-                                               });
+                               FASSERT(!e, e);
+                               promise->set_value();
+                               cnt.fetch_add(1);
                            });
     }
     for (auto& item : recv_promises)
         item->get_future().wait();
-    for (auto& item : send_promises)
-        item->get_future().wait();
+    while (cnt != 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    acceptor.reset();
 }
 
 int main(int argc, char** argv) {
@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
     options.logOutputPath        = "output";
     Fundamental::Logger::Initialize(std::move(options));
     ::testing::InitGoogleTest(&argc, argv);
-    network::io_context_pool::s_excutorNums = 2;
+    network::io_context_pool::s_excutorNums = 10;
     network::io_context_pool::Instance().start();
     return RUN_ALL_TESTS();
 }
