@@ -169,7 +169,7 @@ struct protocal_helper {
             udp_socket.open(end_point.protocol(), ec);
             if (ec) return ec;
         }
-        udp_socket.set_option(asio::ip::udp::socket::reuse_address(true), ec);
+        if (end_point.port() != 0) udp_socket.set_option(asio::ip::udp::socket::reuse_address(true), ec);
         if (ec) return ec;
 #ifndef NETWORK_IPV4_ONLY
         std::error_code ignore_ec;

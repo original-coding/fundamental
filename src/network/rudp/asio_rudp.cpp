@@ -154,8 +154,8 @@ struct rudp_kernel {
     constexpr static std::size_t kMaxRudpSocketCacheBufferNums = 128;
     constexpr static std::size_t kMaxRudpProtocalCacheNums     = 128;
     // system config
-    inline static rudp_config_item kConnectTimeoutMs { 2000, 30, 10000 };
-    inline static rudp_config_item kCommandMaxTryCnt { 5, 2, 10 };
+    inline static rudp_config_item kConnectTimeoutMs { 250, 10, 20000 };
+    inline static rudp_config_item kCommandMaxTryCnt { 20, 2, 500 };
     inline static rudp_config_item kMaxSendWindowSize { 128, 32, kMaxRudpProtocalCacheNums * 2 };
     inline static rudp_config_item kMaxRecvWindowSize { 128, 32, kMaxRudpProtocalCacheNums * 2 };
     inline static rudp_config_item kMtuSize { 1200, 128, 4 * 1024 };
@@ -165,7 +165,7 @@ struct rudp_kernel {
     inline static rudp_config_item kEnbableNoCongestionControl { 1, 0, 1 };
     inline static rudp_config_item kEnbableAutoKeepAlive { 0, 0, 1 };
     inline static rudp_config_item kEnbableStreamMode { 0, 0, 1 };
-    inline static rudp_config_item kMaxConnectionIdleTimeMs { 5000, 200, 60000 };
+    inline static rudp_config_item kMaxConnectionIdleTimeMs { 10000, 200, 60000 };
 
     inline static std::mutex data_mutex;
     inline static rudp_id_t id_ = control_frame_data::kControlMagicNum;
@@ -434,19 +434,21 @@ struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
 
     void destroy() {
         if (close_flag.load()) return;
+        {
+            std::scoped_lock<std::mutex> locker(rudp::rudp_kernel::data_mutex);
+            rudp_kernel::storage_.erase(id_);
+        }
         asio::post(socket.get_executor(), [this, ref = shared_from_this()]() {
             auto expected_value = false;
             if (close_flag.compare_exchange_strong(expected_value, true, std::memory_order::memory_order_relaxed)) {
-                FDEBUG("rudp socket {} closed", id_);
+                FDEBUG("rudp socket {} closed local:{}:{} remote:{}:{}", id_,
+                       socket.local_endpoint().address().to_string(), socket.local_endpoint().port(),
+                       remote_endpoint.address().to_string(), remote_endpoint.port());
                 // remove reference
                 if (client_context) client_context->destroy();
                 if (server_context) server_context->destroy();
                 std::error_code ec;
                 socket.close(ec);
-                {
-                    std::scoped_lock<std::mutex> locker(rudp::rudp_kernel::data_mutex);
-                    rudp_kernel::storage_.erase(id_);
-                }
             }
         });
     }
@@ -484,6 +486,7 @@ struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
     }
     //
     asio::ip::udp::socket socket;
+    asio::ip::udp::endpoint remote_endpoint;
     const rudp_id_t id_ = control_frame_data::kControlMagicNum;
 
     // config
@@ -702,6 +705,8 @@ void rudp_server_context_imp::handle_request() {
 }
 
 void rudp_server_context_imp::handle_syn() {
+    FDEBUG(" rudp server {} recv init syn:{} from  {}->{}:{}", socket_ref->id_, last_control_frame.command_ts,
+           last_control_frame.src_id, sender_endpoint.address().to_string(), sender_endpoint.port());
     std::shared_ptr<rudp_socket> session;
     do {
         auto iter = recv_dic.find(sender_endpoint);
@@ -746,14 +751,14 @@ void rudp_server_context_imp::handle_syn() {
 void rudp_server_context_imp::on_connection_status_changed(std::shared_ptr<rudp_socket> _connection,
                                                            rudp_connection_status current_status,
                                                            Fundamental::error_code ec) {
-    asio::dispatch(socket_ref->get_executor(), [this, ec, current_status, ref = socket_ref->weak_from_this(),
-                                                connection_ref = _connection->weak_from_this()]() {
+    asio::post(socket_ref->get_executor(), [this, ec, current_status, ref = socket_ref->weak_from_this(),
+                                            connection_ref = _connection->weak_from_this()]() {
         auto strong     = ref.lock();
         auto connection = connection_ref.lock();
         if (!strong || !connection) return;
         if (ec) {
 
-            bool has_found = recv_dic.erase(connection->socket.remote_endpoint()) > 0;
+            bool has_found = recv_dic.erase(connection->remote_endpoint) > 0;
             for (auto iter = connected_list.begin(); iter != connected_list.end(); ++iter) {
                 if (iter->get() == connection.get()) {
                     has_found = true;
@@ -771,7 +776,7 @@ void rudp_server_context_imp::on_connection_status_changed(std::shared_ptr<rudp_
         case rudp_connection_status::RUDP_CONNECTED_STATUS: {
             FDEBUG("server {}:{} new pending connection completed {} ", socket_ref->socket.local_endpoint().port(),
                    socket_ref->id_, connection->id_);
-            recv_dic.erase(connection->socket.remote_endpoint());
+            recv_dic.erase(connection->remote_endpoint);
             connected_list.push_back(connection);
             accept_connection();
         } break;
@@ -785,10 +790,11 @@ void rudp_server_context_imp::accept_connection() {
     if (connected_list.empty() || accept_list.empty()) return;
     auto accept_sock = std::move(connected_list.front());
     connected_list.pop_front();
-    FDEBUG("server {}:{} accept {} ", socket_ref->socket.local_endpoint().port(), socket_ref->id_, accept_sock->id_);
     auto& ios          = accept_list.front().ios;
     auto complete_func = accept_list.front().complete_func;
     accept_list.pop_front();
+    FDEBUG("server {}:{} accept {} left [{}/{}]", socket_ref->socket.local_endpoint().port(), socket_ref->id_,
+           accept_sock->id_, connected_list.size(), accept_list.size());
     accept_sock->accept_assign_executor(ios);
     asio::post(ios, [func = complete_func, accept_handle = std::make_shared<rudp_handle>(accept_sock)]() {
         if (func) func(accept_handle, {});
@@ -932,6 +938,7 @@ void rudp_client_context_imp::passive_connect(
         }
 
         set_status(rudp_connection_status::RUDP_SYN_RECV_STATUS);
+        socket_ref->remote_endpoint = sender_endpoint;
         connected_cb = std::bind(complete_func, std::placeholders::_1, rudp_connection_status::RUDP_CONNECTED_STATUS);
         closed_cb    = std::bind(complete_func, std::placeholders::_1, rudp_connection_status::RUDP_CLOSED_STATUS);
         remote_id    = src_id;
@@ -943,7 +950,11 @@ void rudp_client_context_imp::passive_connect(
         socket_read_cache.resize(socket_ref->mtu_size + 32);
         perform_read();
     }
-    send_ack();
+    asio::post(socket_ref->get_executor(), [this, ref = socket_ref->weak_from_this()]() {
+        auto strong = ref.lock();
+        if (!strong) return;
+        send_ack();
+    });
 }
 
 void rudp_client_context_imp::send_ack() {
@@ -1025,7 +1036,7 @@ void rudp_client_context_imp::accept_assign_executor(asio::io_context& new_execu
     if (!is_connected()) return;
     update_timer = std::move(asio::steady_timer(new_executor));
     status_timer = std::move(asio::steady_timer(new_executor));
-    asio::dispatch(socket_ref->socket.get_executor(), [this, ref = socket_ref->weak_from_this()] {
+    asio::post(socket_ref->socket.get_executor(), [this, ref = socket_ref->weak_from_this()] {
         perform_read();
         request_update_rudp_status();
         restart_status_timer();
@@ -1153,19 +1164,19 @@ void rudp_client_context_imp::update_active_time() {
 
 void rudp_client_context_imp::perform_read() {
     if (!is_active()) return;
-    socket_ref->socket.async_receive(asio::buffer(socket_read_cache.data(), socket_read_cache.size()),
-                                     [this, ref = socket_ref->weak_from_this()](std::error_code ec, std::size_t len) {
-                                         auto strong = ref.lock();
-                                         if (!strong || !is_active()) return;
-                                         if (!socket_ref->socket.is_open()) return;
-                                         if (ec) {
-                                             FDEBUG("read size:[{}/{}] from {}:{} failed for {}:{}", len,
-                                                    socket_read_cache.size(),
-                                                    strong->socket.remote_endpoint().address().to_string(),
-                                                    strong->socket.remote_endpoint().port(), ec.value(), ec.message());
-                                         }
-                                         process_read_data(len);
-                                     });
+    socket_ref->socket.async_receive(
+        asio::buffer(socket_read_cache.data(), socket_read_cache.size()),
+        [this, ref = socket_ref->weak_from_this()](std::error_code ec, std::size_t len) {
+            auto strong = ref.lock();
+            if (!strong || !is_active()) return;
+            if (!socket_ref->socket.is_open()) return;
+            if (ec && ec.value() != static_cast<std::int32_t>(std::errc::operation_canceled)) {
+                FDEBUG("read size:[{}/{}] from {}:{} failed for {}:{}", len, socket_read_cache.size(),
+                       strong->socket.remote_endpoint().address().to_string(), strong->socket.remote_endpoint().port(),
+                       ec.value(), ec.message());
+            }
+            process_read_data(len);
+        });
 }
 
 void rudp_client_context_imp::process_read_data(std::size_t read_size) {
@@ -1176,16 +1187,20 @@ void rudp_client_context_imp::process_read_data(std::size_t read_size) {
     } else if (read_size >= 24) { // process data frame
         process_rudp_data_frame(read_size);
     } else {
+#ifdef DEBUG_RUDP
         if (read_size > 0) {
             // invalid payload will be ignored
             FDEBUG("rudp:{} truncate {} bytes", socket_ref->id_, read_size);
         }
+#endif
     }
 }
 
 void rudp_client_context_imp::process_rudp_data_frame(std::size_t read_size) {
+#ifdef DEBUG_RUDP
     FDEBUG(" rudp connection {} recv payload size:{} from  {}:{}", socket_ref->id_, read_size,
            socket_ref->socket.remote_endpoint().address().to_string(), socket_ref->socket.remote_endpoint().port());
+#endif
     if (!is_connected()) return;
     auto ret = ikcp_input(kcp_object.get(), reinterpret_cast<const char*>(socket_read_cache.data()), read_size);
     // ignore invalid data
@@ -1245,6 +1260,14 @@ void rudp_client_context_imp::handle_syn() {
 }
 
 void rudp_client_context_imp::handle_syn_ack() {
+    // ignore invalid data
+    if (recv_control_frame.dst_id != socket_ref->id_) {
+        return;
+    }
+    FDEBUG(" rudp connection {} recv syn ack:{} from  {}->{}:{}", socket_ref->id_, recv_control_frame.command_ts,
+           recv_control_frame.src_id, socket_ref->socket.remote_endpoint().address().to_string(),
+           socket_ref->socket.remote_endpoint().port());
+
     if (status == rudp_connection_status::RUDP_SYN_SENT_STATUS) {
         // update local mtu
         if (socket_ref->mtu_size.current_value < recv_control_frame.payload) {
@@ -1267,6 +1290,9 @@ void rudp_client_context_imp::handle_syn_ack() {
 }
 
 void rudp_client_context_imp::handle_syn_ack2() {
+    FDEBUG(" rudp connection {} recv syn ack2:{} from  {}->{}:{}", socket_ref->id_, recv_control_frame.command_ts,
+           recv_control_frame.src_id, socket_ref->socket.remote_endpoint().address().to_string(),
+           socket_ref->socket.remote_endpoint().port());
     if (status == rudp_connection_status::RUDP_SYN_RECV_STATUS) {
         if (status_check_command == rudp_command_t::RUDP_SYN_ACK2_COMMAND) {
             status_check_command = rudp_command_t::RUDP_UNKNOWN_COMMAND;
@@ -1295,21 +1321,18 @@ void rudp_client_context_imp::handle_pong() {
 }
 
 void rudp_client_context_imp::handle_rst() {
-    FDEBUG(" rudp connection {} recv rst:{} from  {}->{}:{}", socket_ref->id_, recv_control_frame.command_ts,
-           recv_control_frame.src_id, socket_ref->socket.remote_endpoint().address().to_string(),
-           socket_ref->socket.remote_endpoint().port());
+
+    FDEBUG(" rudp connection {} recv rst:{} from  {}->{}:{} to {} current_status:{} remote_id:{}", socket_ref->id_,
+           recv_control_frame.command_ts, recv_control_frame.src_id,
+           socket_ref->socket.remote_endpoint().address().to_string(), socket_ref->socket.remote_endpoint().port(),
+           recv_control_frame.dst_id, static_cast<std::int32_t>(status), remote_id);
     if (status == rudp_connection_status::RUDP_SYN_SENT_STATUS) { // connectien
         // maybey connect failed reset status to init for reconnect
-        status                       = rudp_connection_status::RUDP_INIT_STATUS;
-        status_check_command         = 0;
         status_check_command_try_cnt = 0;
-        status_timer.cancel();
-        std::error_code ec;
-        socket_ref->socket.cancel(ec);
-        auto call_cb = std::move(connected_cb);
-        if (call_cb) call_cb(error::make_error_code(error::rudp_errors::rudp_connection_reset, "recv remote rst"));
     } else {
-        socket_ref->destroy();
+        if (recv_control_frame.src_id == remote_id && recv_control_frame.dst_id == socket_ref->id_) {
+            socket_ref->destroy();
+        }
     }
 }
 
@@ -1323,8 +1346,8 @@ void rudp_client_context_imp::write_data(const void* data, std::size_t len) {
 
 void rudp_client_context_imp::write_data(std::vector<std::uint8_t>&& buf, bool is_control_frame) {
     if (buf.empty()) return;
-    asio::dispatch(socket_ref->get_executor(), [buf = std::move(buf), this, ref = socket_ref->weak_from_this(),
-                                                is_control_frame]() mutable {
+    asio::post(socket_ref->get_executor(), [buf = std::move(buf), this, ref = socket_ref->weak_from_this(),
+                                            is_control_frame]() mutable {
         auto strong = ref.lock();
         if (!strong || is_closed()) return;
         if (is_control_frame) {
@@ -1355,22 +1378,26 @@ void rudp_client_context_imp::flush_data() {
     auto write_data = std::move(access_list.front());
     access_list.pop_front();
     asio::const_buffer buffer { write_data.data(), write_data.size() };
-    socket_ref->socket.async_send(std::move(buffer),
-                                  [this, ref = socket_ref->weak_from_this(),
-                                   write_data = std::move(write_data)](std::error_code ec, std::size_t len) {
-                                      auto strong = ref.lock();
-                                      if (!strong || !is_active()) return;
-                                      if (!socket_ref->socket.is_open()) return;
-                                      if (ec || len != write_data.size()) {
-                                          FDEBUG("send size:[{}/{}] to {}:{} for {}:{}", len, write_data.size(),
-                                                 strong->socket.remote_endpoint().address().to_string(),
-                                                 strong->socket.remote_endpoint().port(), ec.value(), ec.message());
-                                      }
-                                      FDEBUG("send size:[{}/{}] to {}:{} for {}:{}", len, write_data.size(),
-                                             strong->socket.remote_endpoint().address().to_string(),
-                                             strong->socket.remote_endpoint().port(), ec.value(), ec.message());
-                                      flush_data();
-                                  });
+    socket_ref->socket.async_send(
+        std::move(buffer), [this, ref = socket_ref->weak_from_this(),
+                            write_data = std::move(write_data)](std::error_code ec, std::size_t len) {
+            auto strong = ref.lock();
+            if (!strong || !is_active()) return;
+            if (!socket_ref->socket.is_open()) return;
+            if (ec || len != write_data.size()) {
+                FDEBUG("{} send failed size:[{}/{}] to {}:{} for {}:{}", socket_ref->id_, len, write_data.size(),
+                       strong->socket.remote_endpoint().address().to_string(), strong->socket.remote_endpoint().port(),
+                       ec.value(), ec.message());
+            } else {
+#ifdef DEBUG_RUDP
+                FDEBUG("{} send size:[{}/{}] to {}:{} for {}:{}", socket_ref->id_, len, write_data.size(),
+                       strong->socket.remote_endpoint().address().to_string(), strong->socket.remote_endpoint().port(),
+                       ec.value(), ec.message());
+#endif
+            }
+
+            flush_data();
+        });
 }
 
 rudp_client_context_imp::rudp_client_context_imp(rudp_socket* parent) :
@@ -1394,6 +1421,7 @@ void rudp_client_context_imp::connect(const std::string& address,
             endpoint = asio::ip::udp::endpoint(connect_address, port);
             // remote bind
             socket_ref->socket.connect(endpoint, ec);
+            socket_ref->remote_endpoint = endpoint;
             if (ec) {
                 break;
             }
@@ -1409,7 +1437,11 @@ void rudp_client_context_imp::connect(const std::string& address,
         if (complete_func) complete_func(ec);
         return;
     } else {
-        send_syn();
+        asio::post(socket_ref->get_executor(), [this, ref = socket_ref->weak_from_this()]() {
+            auto strong = ref.lock();
+            if (!strong) return;
+            send_syn();
+        });
     }
 }
 
