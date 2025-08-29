@@ -19,7 +19,7 @@ public:
     rudp_handle() = default;
     rudp_handle(std::shared_ptr<rudp_socket> socket);
 
-    rudp_handle& operator=(rudp_handle&& other);
+    rudp_handle& operator=(rudp_handle&& other) noexcept;
     rudp_handle(rudp_handle&& other) noexcept;
 
     rudp_handle(const rudp_handle& other)            = delete;

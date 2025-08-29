@@ -300,7 +300,7 @@ struct rudp_server_context_imp {
     std::list<std::shared_ptr<rudp_socket>> connected_list;
 
     std::list<rudp_accept_session> accept_list;
-    std::array<std::uint8_t, control_frame_data::kRudpControlFrameSize> recv_buf;
+    std::array<std::uint8_t, control_frame_data::kRudpControlFrameSize> recv_buf = { 0 };
     asio::ip::udp::endpoint sender_endpoint;
     control_frame_data last_control_frame;
 };
@@ -449,8 +449,8 @@ struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
                 // remove reference
                 if (client_context) client_context->destroy(ec);
                 if (server_context) server_context->destroy(ec);
-                std::error_code ec;
-                socket.close(ec);
+                std::error_code e;
+                socket.close(e);
             }
         });
     }
@@ -1080,10 +1080,13 @@ void rudp_client_context_imp::init_rudp_output() {
     kcp_object.get()->notify_write = __rudp_on_frame_sent__;
     // set stream mode
     kcp_object.get()->stream = socket_ref->stream_mode ? 1 : 0;
-    ikcp_setmtu(kcp_object.get(), socket_ref->mtu_size);
-    ikcp_wndsize(kcp_object.get(), socket_ref->send_window_size, socket_ref->recv_window_size);
-    ikcp_nodelay(kcp_object.get(), socket_ref->enable_no_delay, socket_ref->update_interval_ms,
-                 socket_ref->resend_skip_cnt, socket_ref->enable_no_congestion_control);
+    ikcp_setmtu(kcp_object.get(), static_cast<std::int32_t>(socket_ref->mtu_size));
+    ikcp_wndsize(kcp_object.get(), static_cast<std::int32_t>(socket_ref->send_window_size),
+                 static_cast<std::int32_t>(socket_ref->recv_window_size));
+    ikcp_nodelay(kcp_object.get(), static_cast<std::int32_t>(socket_ref->enable_no_delay),
+                 static_cast<std::int32_t>(socket_ref->update_interval_ms),
+                 static_cast<std::int32_t>(socket_ref->resend_skip_cnt),
+                 static_cast<std::int32_t>(socket_ref->enable_no_congestion_control));
 }
 
 void rudp_client_context_imp::notify_data_bytes_write(std::size_t len) {
@@ -1245,7 +1248,8 @@ void rudp_client_context_imp::process_rudp_data_frame(std::size_t read_size) {
            socket_ref->remote_endpoint.address().to_string(), socket_ref->remote_endpoint.port());
 #endif
     if (!is_connected()) return;
-    auto ret = ikcp_input(kcp_object.get(), reinterpret_cast<const char*>(socket_read_cache.data()), read_size);
+    auto ret = ikcp_input(kcp_object.get(), reinterpret_cast<const char*>(socket_read_cache.data()),
+                          static_cast<long>(read_size));
     // ignore invalid data
     if (ret != 0) return;
     update_active_time();
@@ -1485,7 +1489,7 @@ void rudp_client_context_imp::rudp_send(
             ec = error::make_error_code(error::rudp_errors::rudp_not_connected);
             break;
         }
-        auto ret = ikcp_send(kcp_object.get(), static_cast<const char*>(buf), len);
+        auto ret = ikcp_send(kcp_object.get(), static_cast<const char*>(buf), static_cast<std::int32_t>(len));
         if (0 == ret) break;
         if (ret < 0) {
             // an error occurred
@@ -1541,7 +1545,7 @@ rudp_handle::rudp_handle(std::shared_ptr<rudp_socket> socket) : socket_(socket) 
 rudp_handle::rudp_handle(rudp_handle&& other) noexcept : socket_(std::move(other.socket_)) {
 }
 
-rudp_handle& rudp_handle::operator=(rudp_handle&& other) {
+rudp_handle& rudp_handle::operator=(rudp_handle&& other) noexcept {
     destroy();
     socket_ = std::move(other.socket_);
     return *this;
