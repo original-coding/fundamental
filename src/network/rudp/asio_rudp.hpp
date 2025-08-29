@@ -12,6 +12,8 @@ namespace network::rudp
 {
 struct rudp_socket;
 
+inline constexpr std::size_t kRudpProtocalHeadSize = 24;
+
 class rudp_handle {
 public:
     rudp_handle() = default;

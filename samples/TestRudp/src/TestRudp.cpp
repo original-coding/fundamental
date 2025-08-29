@@ -1,10 +1,12 @@
+#include "fundamental/basic/random_generator.hpp"
+#include "fundamental/delay_queue/delay_queue.h"
 #include "network/io_context_pool.hpp"
 #include "network/rudp/asio_rudp.hpp"
 
 #include <gtest/gtest.h>
 using namespace network;
 using namespace network::rudp;
-#if 0
+#if 1
 TEST(rudp_test, basic) {
     Fundamental::error_code ec;
     auto server_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
@@ -102,30 +104,103 @@ TEST(rudp_test, listen_queue_size) {
         auto f = finish_promise.get_future();
         f.wait();
     }
-
     {
         auto client_handler2 = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+        rudp_config(client_handler2, rudp_config_type::RUDP_CONNECT_TIMEOUT_MS, 10);
+        rudp_config(client_handler2, rudp_config_type::RUDP_COMMAND_MAX_TRY_CNT, 2);
         rudp_bind(client_handler2, 0, "", ec);
         std::promise<void> finish_promise2;
         async_rudp_connect(client_handler2, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
             EXPECT_FALSE(!e);
+            FWARN(e);
             finish_promise2.set_value();
         });
         auto f2 = finish_promise2.get_future();
         f2.wait();
     }
-    // release connection
-    client_handler->destroy();
     {
+        auto time_now = Fundamental::Timer::GetTimeNow();
+        asio::steady_timer t(network::io_context_pool::Instance().get_io_context());
+        std::int64_t delay_ms = 200;
+        t.expires_after(std::chrono::milliseconds(delay_ms));
+        //delay release listen queue
+        t.async_wait([&](Fundamental::error_code) { client_handler->destroy(); });
         auto client_handler2 = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
         rudp_bind(client_handler2, 0, "", ec);
-        std::promise<void> finish_promise2;
+        std::promise<std::int64_t> finish_promise2;
         async_rudp_connect(client_handler2, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
             EXPECT_TRUE(!e);
-            finish_promise2.set_value();
+            finish_promise2.set_value(Fundamental::Timer::GetTimeNow());
         });
         auto f2 = finish_promise2.get_future();
         f2.wait();
+        auto diff = f2.get() - time_now;
+        EXPECT_GE(diff, delay_ms);
+    }
+}
+
+TEST(rudp_test, test_stream_mode_connect) {
+    {
+        Fundamental::error_code ec;
+        auto server_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+        rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
+
+        rudp_bind(server_handler, 42000, "", ec);
+        rudp_listen(server_handler, 10, ec);
+        {
+            auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+            rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 1);
+            rudp_bind(client_handler, 0, "", ec);
+            std::promise<void> connect_promise;
+            async_rudp_connect(client_handler, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
+                EXPECT_FALSE(!e);
+                FWARN(e);
+                connect_promise.set_value();
+            });
+            connect_promise.get_future().wait();
+        }
+        {
+            auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+            rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
+            rudp_bind(client_handler, 0, "", ec);
+            std::promise<void> connect_promise;
+            async_rudp_connect(client_handler, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
+                EXPECT_TRUE(!e);
+                connect_promise.set_value();
+            });
+            connect_promise.get_future().wait();
+        }
+    }
+    {
+        Fundamental::error_code ec;
+        auto server_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+        rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 1);
+
+        rudp_bind(server_handler, 42000, "", ec);
+        rudp_listen(server_handler, 10, ec);
+        {
+            auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+            rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 1);
+            rudp_bind(client_handler, 0, "", ec);
+            std::promise<void> connect_promise;
+            async_rudp_connect(client_handler, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
+                EXPECT_TRUE(!e);
+                FWARN(e);
+                connect_promise.set_value();
+            });
+            connect_promise.get_future().wait();
+        }
+        {
+            auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+            rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
+            rudp_bind(client_handler, 0, "", ec);
+            std::promise<void> connect_promise;
+            async_rudp_connect(client_handler, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
+                EXPECT_TRUE(!e);
+                connect_promise.set_value();
+            });
+            connect_promise.get_future().wait();
+        }
     }
 }
 
@@ -165,7 +240,6 @@ TEST(rudp_test, connection_auto_disconnect) {
     EXPECT_FALSE(*client_handler);
     EXPECT_FALSE(*accept_handle);
 }
-#endif
 
 struct rudp_acceptor : public std::enable_shared_from_this<rudp_acceptor> {
     rudp_acceptor(rudp_handle_t& handle) : rudp_handle(handle) {
@@ -242,6 +316,194 @@ TEST(rudp_test, multi_connection) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     acceptor.reset();
 }
+
+
+TEST(rudp_test, test_mtu_select) {
+    Fundamental::error_code ec;
+    std::size_t data_chunk_size   = 256;
+    std::size_t send_windows_size = 100;
+    std::size_t recv_windows_size = 100;
+    auto server_handler           = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
+    rudp_config(server_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
+    rudp_config(server_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, send_windows_size);
+    rudp_config(server_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, recv_windows_size);
+    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 1);
+
+    rudp_bind(server_handler, 42000, "", ec);
+    rudp_listen(server_handler, 10, ec);
+    std::promise<rudp_handle_t> accept_promise;
+    async_rudp_accept(server_handler, network::io_context_pool::Instance().get_io_context(),
+                      [&](rudp_handle_t handle, Fundamental::error_code ec) {
+                          EXPECT_TRUE(!ec);
+                          accept_promise.set_value(handle);
+                      });
+    auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
+    rudp_config(client_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size / 2 + kRudpProtocalHeadSize);
+    rudp_config(client_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, send_windows_size);
+    rudp_config(client_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, recv_windows_size);
+    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 1);
+
+    rudp_bind(client_handler, 0, "", ec);
+    std::promise<void> connect_promise;
+    async_rudp_connect(client_handler, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
+        EXPECT_TRUE(!e);
+        connect_promise.set_value();
+    });
+    connect_promise.get_future().wait();
+    auto remote_handler = accept_promise.get_future().get();
+    {
+        std::string failed_data(send_windows_size * data_chunk_size, 'c');
+        std::promise<void> send_promise;
+        async_rudp_send(client_handler, failed_data.data(), failed_data.size(),
+                        [&](std::size_t, Fundamental::error_code ec) {
+                            EXPECT_FALSE(!ec);
+                            FWARN(ec);
+                            send_promise.set_value();
+                        });
+        send_promise.get_future().wait();
+    }
+    {
+        std::string success_data(send_windows_size * data_chunk_size / 2, 'c');
+        std::string recv_data;
+        recv_data.resize(success_data.size());
+        std::promise<void> send_promise;
+        async_rudp_send(client_handler, success_data.data(), success_data.size(),
+                        [&](std::size_t, Fundamental::error_code ec) {
+                            EXPECT_TRUE(!ec);
+                            send_promise.set_value();
+                        });
+        std::promise<void> recv_promise;
+        async_rudp_recv(remote_handler, recv_data.data(), recv_data.size(),
+                        [&](std::size_t, Fundamental::error_code ec) {
+                            EXPECT_TRUE(!ec);
+                            recv_promise.set_value();
+                        });
+        send_promise.get_future().wait();
+        recv_promise.get_future().wait();
+        EXPECT_EQ(success_data, recv_data);
+    }
+    {
+        std::string success_data(send_windows_size * data_chunk_size / 2, 'c');
+        std::string recv_data;
+        recv_data.resize(success_data.size());
+        std::promise<void> send_promise;
+        async_rudp_send(client_handler, success_data.data(), success_data.size(),
+                        [&](std::size_t, Fundamental::error_code ec) {
+                            EXPECT_TRUE(!ec);
+                            send_promise.set_value();
+                        });
+        std::promise<void> recv_promise;
+        async_rudp_recv(remote_handler, recv_data.data(), recv_data.size() - 1,
+                        [&](std::size_t len, Fundamental::error_code ec) {
+                            EXPECT_FALSE(!ec);
+                            FWARN(ec);
+                            EXPECT_EQ(recv_data.size(), len + 1);
+                            recv_promise.set_value();
+                        });
+        send_promise.get_future().wait();
+        recv_promise.get_future().wait();
+        EXPECT_TRUE(std::strncmp(success_data.data(), recv_data.data(), recv_data.size() - 1) == 0);
+    }
+}
+
+
+TEST(rudp_test, test_stream_mode) {
+    Fundamental::error_code ec;
+    std::size_t data_chunk_size   = 256;
+    std::size_t send_windows_size = 100;
+    std::size_t recv_windows_size = 80;
+    auto server_handler           = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 1);
+    rudp_config(server_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
+    rudp_config(server_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, send_windows_size);
+    rudp_config(server_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, recv_windows_size);
+    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 1);
+
+    rudp_bind(server_handler, 42000, "", ec);
+    rudp_listen(server_handler, 10, ec);
+    std::promise<rudp_handle_t> accept_promise;
+    async_rudp_accept(server_handler, network::io_context_pool::Instance().get_io_context(),
+                      [&](rudp_handle_t handle, Fundamental::error_code ec) {
+                          EXPECT_TRUE(!ec);
+                          accept_promise.set_value(handle);
+                      });
+    auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 1);
+    rudp_config(client_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
+    rudp_config(client_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, send_windows_size);
+    rudp_config(client_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, recv_windows_size);
+    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 1);
+
+    rudp_bind(client_handler, 0, "", ec);
+    std::promise<void> connect_promise;
+    async_rudp_connect(client_handler, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
+        EXPECT_TRUE(!e);
+        connect_promise.set_value();
+    });
+    connect_promise.get_future().wait();
+    auto remote_handler = accept_promise.get_future().get();
+    {
+        std::string success_data;
+        success_data.resize(send_windows_size * data_chunk_size);
+        auto generate = Fundamental::DefaultNumberGenerator<char>('a', 'z');
+        generate.gen(success_data.data(), success_data.size());
+        std::string recv_data;
+        recv_data.resize(success_data.size());
+        std::promise<void> send_promise;
+        async_rudp_send(client_handler, success_data.data(), success_data.size(),
+                        [&](std::size_t, Fundamental::error_code ec) {
+                            EXPECT_TRUE(!ec);
+                            send_promise.set_value();
+                        });
+        for (std::size_t i = 0; i < send_windows_size; ++i) {
+            std::promise<void> recv_promise;
+            async_rudp_recv(remote_handler, recv_data.data() + i * data_chunk_size, data_chunk_size,
+                            [&](std::size_t len, Fundamental::error_code ec) {
+                                EXPECT_TRUE(!ec);
+                                EXPECT_TRUE(len == data_chunk_size);
+                                recv_promise.set_value();
+                            });
+            recv_promise.get_future().wait();
+        }
+
+        send_promise.get_future().wait();
+
+        EXPECT_TRUE(success_data == recv_data);
+    }
+    {
+        std::string success_data;
+        success_data.resize(data_chunk_size);
+        auto generate = Fundamental::DefaultNumberGenerator<char>('a', 'z');
+        generate.gen(success_data.data(), success_data.size());
+        std::string recv_data;
+        recv_data.resize(data_chunk_size);
+        std::vector<std::promise<void>> send_promises;
+        send_promises.resize(data_chunk_size);
+        for (std::size_t i = 0; i < data_chunk_size; ++i) {
+            async_rudp_send(client_handler, success_data.data() + i, 1,
+                            [&, num = i](std::size_t len, Fundamental::error_code ec) {
+                                EXPECT_TRUE(!ec);
+                                EXPECT_EQ(len, 1);
+                                send_promises[num].set_value();
+                            });
+        }
+
+        std::promise<void> recv_promise;
+        async_rudp_recv(remote_handler, recv_data.data(), data_chunk_size,
+                        [&](std::size_t len, Fundamental::error_code ec) {
+                            EXPECT_TRUE(!ec);
+                            EXPECT_TRUE(len == data_chunk_size);
+                            recv_promise.set_value();
+                        });
+        recv_promise.get_future().wait();
+        for (auto& item : send_promises)
+            item.get_future().wait();
+        EXPECT_TRUE(success_data == recv_data);
+    }
+}
+#endif
 
 int main(int argc, char** argv) {
     Fundamental::Logger::LoggerInitOptions options;

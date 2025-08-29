@@ -44,6 +44,7 @@ enum class rudp_errors : std::int32_t
     rudp_operation_canceled      = static_cast<std::int32_t>(std::errc::operation_canceled),
     rudp_operation_in_progress   = static_cast<std::int32_t>(std::errc::operation_in_progress),
     rudp_connection_reset        = static_cast<std::int32_t>(std::errc::connection_reset),
+    rudp_network_unreachable     = static_cast<std::int32_t>(std::errc::network_unreachable),
 };
 
 class rudp_category : public std::error_category, public Fundamental::Singleton<rudp_category> {
@@ -66,6 +67,7 @@ public:
         case rudp_errors::rudp_operation_canceled: return "rudp operation canceled";
         case rudp_errors::rudp_operation_in_progress: return "rudp operation in progress";
         case rudp_errors::rudp_connection_reset: return "rudp connection reset";
+        case rudp_errors::rudp_network_unreachable: return "rudp unreachable";
         default: return "network.rudp error";
         }
     }
