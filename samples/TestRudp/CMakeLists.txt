@@ -51,35 +51,3 @@ target_link_libraries(${app_target_name}
     gtest
 )
 config_enable_sanitize_address_check(${app_target_name})
-if(TARGET_PLATFORM_WINDOWS)
-    set(DST_INSTALL_PATH "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
-else()
-    set(DST_INSTALL_PATH "${CMAKE_CURRENT_BINARY_DIR}")
-endif()
-install(FILES ${FUNDAMENTAL_ASSETS_PATH}/dh2048.pem
-    ${FUNDAMENTAL_ASSETS_PATH}/server.crt
-    ${FUNDAMENTAL_ASSETS_PATH}/server.key
-    ${FUNDAMENTAL_ASSETS_PATH}/client.key
-    ${FUNDAMENTAL_ASSETS_PATH}/client.crt
-    ${FUNDAMENTAL_ASSETS_PATH}/ca_root.crt
-    COMPONENT ssl-crt
-    DESTINATION ${DST_INSTALL_PATH})
-
-if(CMAKE_CONFIGURATION_TYPES) 
-    add_custom_command(
-        TARGET ${app_target_name}
-        POST_BUILD
-        COMMAND ${CMAKE_COMMAND} --install . 
-            --prefix "$<TARGET_FILE_DIR:${app_target_name}>"
-            --config $<CONFIG>
-            --component ssl-crt
-    )
-else() 
-    add_custom_command(
-        TARGET ${app_target_name}
-        POST_BUILD
-        COMMAND ${CMAKE_COMMAND} --install . 
-            --prefix "$<TARGET_FILE_DIR:${app_target_name}>"
-            --component ssl-crt
-    )
-endif()
