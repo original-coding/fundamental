@@ -505,7 +505,93 @@ TEST(rudp_test, test_stream_mode) {
     }
 }
     #endif
+
 #endif
+TEST(rudp_test, benchmark) {
+    Fundamental::error_code ec;
+    std::size_t data_chunk_size = 1200;
+    std::size_t window_size     = 128;
+    auto server_handler         = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
+    rudp_config(server_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
+    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
+    rudp_config(server_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, window_size);
+    rudp_config(server_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, window_size);
+    rudp_config(server_handler, rudp_config_type::RUDP_UPDATE_INTERVAL_MS, 10);
+    rudp_bind(server_handler, 42000, "::", ec);
+    rudp_listen(server_handler, 10, ec);
+    std::promise<rudp_handle_t> accept_promise;
+    async_rudp_accept(server_handler, network::io_context_pool::Instance().get_io_context(),
+                      [&](rudp_handle_t handle, Fundamental::error_code ec) {
+                          EXPECT_TRUE(!ec);
+                          accept_promise.set_value(handle);
+                      });
+    auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
+    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
+    rudp_config(client_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
+    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
+    rudp_config(client_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, window_size);
+    rudp_config(client_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, window_size);
+    rudp_config(client_handler, rudp_config_type::RUDP_UPDATE_INTERVAL_MS, 10);
+
+    rudp_bind(client_handler, 0, "127.0.0.1", ec);
+    std::promise<void> connect_promise;
+    async_rudp_connect(client_handler, "127.0.0.1", 42000, [&](Fundamental::error_code e) {
+        EXPECT_TRUE(!e);
+        connect_promise.set_value();
+    });
+    connect_promise.get_future().wait();
+    auto remote_handler = accept_promise.get_future().get();
+    FINFO("start rudp benckmark");
+    auto now              = Fundamental::Timer::GetTimeNow();
+    std::size_t send_nums = 1024 * 1024; // 1M
+    auto group_size       = window_size / 2;
+    auto send_task_token  = Fundamental::ThreadPool::DefaultPool().Enqueue([&]() {
+        std::string send_data(data_chunk_size * group_size, 'c');
+        std::promise<void> send_promise;
+        auto loop_func = [&](auto self, std::size_t left_times) {
+            if (left_times == 0) {
+                send_promise.set_value();
+                return;
+            }
+            --left_times;
+            async_rudp_send(client_handler, send_data.data(), send_data.size(),
+                             [left_times, self](std::size_t len, Fundamental::error_code ec) {
+                                if (left_times % 100 == 0) FINFO("send:{}  {}", left_times, len);
+                                EXPECT_TRUE(!ec);
+                                self(self, left_times);
+                            });
+        };
+        loop_func(loop_func, send_nums / group_size);
+        send_promise.get_future().get();
+    });
+    auto recv_task_token  = Fundamental::ThreadPool::DefaultPool().Enqueue([&]() {
+        std::string recv_data;
+        recv_data.resize(data_chunk_size * group_size);
+        std::promise<void> recv_promise;
+        auto loop_func = [&](auto self, std::size_t left_times) {
+            if (left_times == 0) {
+                recv_promise.set_value();
+                return;
+            }
+            --left_times;
+            async_rudp_recv(remote_handler, recv_data.data(), recv_data.size(),
+                             [left_times, self](std::size_t len, Fundamental::error_code ec) {
+                                if (left_times % 100 == 0) FINFO("recv:{}  {}", left_times, len);
+                                EXPECT_TRUE(!ec);
+                                self(self, left_times);
+                            });
+        };
+        loop_func(loop_func, send_nums / group_size);
+        recv_promise.get_future().get();
+    });
+    send_task_token.resultFuture.get();
+    recv_task_token.resultFuture.get();
+    auto cost_ms         = Fundamental::Timer::GetTimeNow() - now;
+    double send_cost_sec = cost_ms / 1000.0;
+    double send_bytes    = static_cast<double>(data_chunk_size * send_nums);
+    FWARN("local network speed {}MB/s", send_bytes / 1024.0 / (send_cost_sec * 1024.0));
+}
 
 int main(int argc, char** argv) {
     Fundamental::Logger::LoggerInitOptions options;

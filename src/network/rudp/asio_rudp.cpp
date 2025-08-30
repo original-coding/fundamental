@@ -151,16 +151,17 @@ struct rudp_kernel {
     }
 
     constexpr static std::size_t kMaxRudpDescriptorNums        = 1024 * 1024;
-    constexpr static std::size_t kMaxRudpSocketCacheBufferNums = 128;
-    constexpr static std::size_t kMaxRudpProtocalCacheNums     = 256;
+    constexpr static std::size_t kMaxRudpSocketCacheBufferNums = 512;
+    constexpr static std::size_t kMaxRudpProtocalCacheNums     = kMaxRudpSocketCacheBufferNums * 2;
+    constexpr static std::size_t kMaxMtuSize                   = 32 * 1024;
     // system config
     inline static rudp_config_item kConnectTimeoutMs { 250, 10, 20000 };
     inline static rudp_config_item kCommandMaxTryCnt { 20, 2, 500 };
     inline static rudp_config_item kMaxSendWindowSize { 128, 32, kMaxRudpProtocalCacheNums };
     inline static rudp_config_item kMaxRecvWindowSize { 128, 32, kMaxRudpProtocalCacheNums };
-    inline static rudp_config_item kMtuSize { 1200, 64, 32 * 1024 };
+    inline static rudp_config_item kMtuSize { 1200, 64, kMaxMtuSize };
     inline static rudp_config_item kEnableNoDelay { 1, 0, 1 };
-    inline static rudp_config_item kUpdateIntervalMs { 10, 5, 500 };
+    inline static rudp_config_item kUpdateIntervalMs { 10, 5, 200 };
     inline static rudp_config_item kResendSkipCnt { 0, 0, 10 };
     inline static rudp_config_item kEnbableNoCongestionControl { 1, 0, 1 };
     inline static rudp_config_item kEnbableAutoKeepAlive { 0, 0, 1 };
@@ -220,6 +221,7 @@ struct rudp_client_context_imp {
     void init_rudp_output();
     void notify_data_bytes_write(std::size_t len);
     void request_update_rudp_status();
+    void process_update_rudp_status();
     void comsume_remote_frames();
     void update_active_time();
     //
@@ -309,6 +311,9 @@ struct rudp_server_context_imp {
 
 struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
     rudp_socket(rudp_id_t id, const asio::any_io_executor& executor) : socket(executor), id_(id) {
+        std::error_code ec;
+        socket.set_option(asio::ip::udp::socket::receive_buffer_size(rudp_kernel::kMaxMtuSize), ec);
+        socket.set_option(asio::ip::udp::socket::send_buffer_size(rudp_kernel::kMaxMtuSize), ec);
     }
     ~rudp_socket() {
     }
@@ -1150,6 +1155,18 @@ void rudp_client_context_imp::notify_data_bytes_write(std::size_t len) {
         }
     }
 }
+void rudp_client_context_imp::process_update_rudp_status() {
+    ikcp_update(kcp_object.get(), get_clock_t());
+    auto protocal_cache_size = ikcp_waitsnd(kcp_object.get());
+    if (static_cast<std::size_t>(protocal_cache_size) > rudp_kernel::kMaxRudpProtocalCacheNums) {
+        FWARN("send cache size:{}  is overflow {},your should control send interval or check the network "
+              "status,active disconnect",
+              protocal_cache_size, rudp_kernel::kMaxRudpProtocalCacheNums);
+        socket_ref->destroy(error::make_error_code(
+            error::rudp_errors::rudp_failed,
+            "rudp protocal cache overflow,maybe network is too poor for your data transmission efficiency"));
+    }
+}
 
 void rudp_client_context_imp::request_update_rudp_status() {
     if (!is_connected()) return;
@@ -1177,17 +1194,7 @@ void rudp_client_context_imp::request_update_rudp_status() {
         // maybe canceled
         auto strong = ref.lock();
         if (!strong || ec) return;
-        ikcp_update(kcp_object.get(), get_clock_t());
-        auto protocal_cache_size = ikcp_waitsnd(kcp_object.get());
-        if (static_cast<std::size_t>(protocal_cache_size) > rudp_kernel::kMaxRudpProtocalCacheNums) {
-            FWARN("send cache size:{}  is overflow {},your should control send interval or check the network "
-                  "status,active disconnect",
-                  protocal_cache_size, rudp_kernel::kMaxRudpProtocalCacheNums);
-            socket_ref->destroy(error::make_error_code(
-                error::rudp_errors::rudp_failed,
-                "rudp protocal cache overflow,maybe network is too poor for your data transmission efficiency"));
-            return;
-        }
+        process_update_rudp_status();
         request_update_rudp_status();
     });
 }
@@ -1297,8 +1304,8 @@ void rudp_client_context_imp::process_rudp_data_frame(const std::uint8_t* data, 
     // ignore invalid data
     if (ret != 0) return;
     update_active_time();
+    process_update_rudp_status();
     comsume_remote_frames();
-    request_update_rudp_status();
 }
 
 void rudp_client_context_imp::process_control_frame(const std::uint8_t* data) {
@@ -1420,8 +1427,8 @@ void rudp_client_context_imp::write_data(const void* data, std::size_t len) {
 
 void rudp_client_context_imp::write_data(std::vector<std::uint8_t>&& buf, bool is_control_frame) {
     if (buf.empty()) return;
-    asio::post(socket_ref->get_executor(), [buf = std::move(buf), this, ref = socket_ref->weak_from_this(),
-                                            is_control_frame]() mutable {
+    asio::dispatch(socket_ref->get_executor(), [buf = std::move(buf), this, ref = socket_ref->weak_from_this(),
+                                                is_control_frame]() mutable {
         auto strong = ref.lock();
         if (!strong || is_closed()) return;
         if (is_control_frame) {
@@ -1449,23 +1456,23 @@ void rudp_client_context_imp::write_data(std::vector<std::uint8_t>&& buf, bool i
 void rudp_client_context_imp::flush_data() {
     auto& access_list = pending_control_frames.empty() ? pending_data_frames : pending_control_frames;
     if (access_list.empty()) return;
-    auto write_data = std::move(access_list.front());
+    auto send_data = std::move(access_list.front());
     access_list.pop_front();
-    asio::const_buffer buffer { write_data.data(), write_data.size() };
+    asio::const_buffer buffer { send_data.data(), send_data.size() };
     socket_ref->socket.async_send(std::move(buffer),
                                   [this, ref = socket_ref->weak_from_this(),
-                                   write_data = std::move(write_data)](std::error_code ec, std::size_t len) {
+                                   send_data = std::move(send_data)](std::error_code ec, std::size_t len) {
                                       auto strong = ref.lock();
                                       if (!strong || !is_active()) return;
                                       if (!socket_ref->socket.is_open()) return;
-                                      if (ec || len != write_data.size()) {
+                                      if (ec || len != send_data.size()) {
                                           FDEBUG("{} send failed size:[{}/{}] to {}:{} for {}:{}", socket_ref->id_, len,
-                                                 write_data.size(), strong->remote_endpoint.address().to_string(),
+                                                 send_data.size(), strong->remote_endpoint.address().to_string(),
                                                  strong->remote_endpoint.port(), ec.value(), ec.message());
                                       } else {
 #ifdef DEBUG_RUDP
                                           FDEBUG("{} send size:[{}/{}] to {}:{} for {}:{}", socket_ref->id_, len,
-                                                 write_data.size(), strong->remote_endpoint.address().to_string(),
+                                                 send_data.size(), strong->remote_endpoint.address().to_string(),
                                                  strong->remote_endpoint.port(), ec.value(), ec.message());
 #endif
                                       }
@@ -1545,7 +1552,7 @@ void rudp_client_context_imp::rudp_send(
         auto& session         = pending_rudp_write_requests.emplace_back();
         session.data_len      = static_cast<std::size_t>(ret);
         session.complete_func = complete_func;
-        request_update_rudp_status();
+        process_update_rudp_status();
         return;
     } while (0);
     if (complete_func) complete_func(0, ec);
