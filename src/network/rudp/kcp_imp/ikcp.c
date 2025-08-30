@@ -481,7 +481,7 @@ int ikcp_send(ikcpcb* kcp, const char* buffer, int len) {
     else
         count = (len + kcp->mss - 1) / kcp->mss;
     // check send window
-    if (count > kcp->snd_wnd) {
+    if (count > (int)kcp->snd_wnd) {
         if (kcp->stream != 0 && sent > 0) return sent;
         return -2;
     }
