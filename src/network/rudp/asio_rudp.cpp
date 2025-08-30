@@ -463,11 +463,15 @@ struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
         if (!client_context || !client_context->is_connected()) return;
         client_context->closed_cb    = nullptr;
         client_context->connected_cb = nullptr;
-        auto native_sock             = socket.native_handle();
-        auto protocal                = socket.local_endpoint().protocol();
-        socket.release();
+#ifndef _WIN32
+        auto native_sock = socket.native_handle();
+        auto protocal    = socket.local_endpoint().protocol();
+        Fundamental::error_code ec;
+        socket.release(ec);
+        if (ec) return;
         socket = std::move(asio::ip::udp::socket(ios, protocal, native_sock));
         client_context->accept_assign_executor(ios);
+#endif // !_WIN32
     }
 
     decltype(auto) get_executor() {
@@ -699,7 +703,7 @@ bool rudp_server_context_imp::filter_data(const void* data, std::size_t data_len
         auto iter = filter_table.find(sender_endpoint);
         if (iter == filter_table.end()) break;
         auto strong = iter->second.lock();
-        if (!strong||strong->is_closed()) {
+        if (!strong || strong->is_closed()) {
             filter_table.erase(iter);
             break;
         }
@@ -707,10 +711,10 @@ bool rudp_server_context_imp::filter_data(const void* data, std::size_t data_len
         std::vector<std::uint8_t> copy_data;
         copy_data.resize(data_len);
         std::memcpy(copy_data.data(), data, data_len);
-        asio::post(strong->get_executor(),[ref=iter->second,new_data=std::move(copy_data)](){
-            auto c=ref.lock();
-            if(!c||c->is_closed())return;
-            c->client_context->process_read_data(new_data.data(),new_data.size());
+        asio::post(strong->get_executor(), [ref = iter->second, new_data = std::move(copy_data)]() {
+            auto c = ref.lock();
+            if (!c || c->is_closed()) return;
+            c->client_context->process_read_data(new_data.data(), new_data.size());
         });
         return true;
     } while (0);
@@ -1262,12 +1266,12 @@ void rudp_client_context_imp::perform_read() {
                        strong->remote_endpoint.address().to_string(), strong->remote_endpoint.port(), ec.value(),
                        ec.message());
             }
+            Fundamental::ScopeGuard g([&]() { perform_read(); });
             process_read_data(socket_read_cache.data(), len);
         });
 }
 
 void rudp_client_context_imp::process_read_data(const std::uint8_t* data, std::size_t read_size) {
-    Fundamental::ScopeGuard g([&]() { perform_read(); });
     if (read_size == control_frame_data::kRudpControlFrameSize) {
         process_control_frame(data);
 
