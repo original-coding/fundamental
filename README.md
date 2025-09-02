@@ -12,7 +12,7 @@ fundamental kits for developer
 - 命令行解析
 - hash/base64
 - 基于rttr实现的chaiscript绑定，可用于基于chai脚本动态测试
-
+- 基于asio+kcp实现的rudp协议，支持rudp_server/rudp_client
 # 目录结构
 ```
 .
