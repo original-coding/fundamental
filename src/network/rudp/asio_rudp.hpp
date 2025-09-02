@@ -53,6 +53,9 @@ void async_rudp_connect(rudp_handle_t handle,
                         const std::string& address,
                         std::uint16_t port,
                         const std::function<void(Fundamental::error_code)>& complete_func);
+void async_rudp_wait_connect(rudp_handle_t handle,
+                             const std::function<void(Fundamental::error_code)>& complete_func,
+                             std::size_t max_wait_ms);
 
 void async_rudp_send(rudp_handle_t handle,
                      const void* buf,
