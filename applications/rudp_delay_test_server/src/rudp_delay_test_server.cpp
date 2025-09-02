@@ -94,7 +94,8 @@ int main(int argc, char* argv[]) {
     bool disable_no_delay       = false;
 
     arg_parser.AddOption("mode", Fundamental::StringFormat("workmode default:{}", mode), 'm',
-                         Fundamental::arg_parser::param_type::required_param, "0:server 1:client");
+                         Fundamental::arg_parser::param_type::required_param,
+                         "0:multi server 1:client 2:single server");
     arg_parser.AddOption("port", Fundamental::StringFormat("local bind port default:{}", port), 'p',
                          Fundamental::arg_parser::param_type::required_param, "port");
     arg_parser.AddOption("host", Fundamental::StringFormat("local bind host default:{}", host), 'b',
@@ -193,6 +194,32 @@ int main(int argc, char* argv[]) {
             });
         ios.run();
 
+    } else if (mode == 2) {
+        FINFO("start rudp single server on [{}] {}", host, port);
+        Fundamental::error_code ec;
+        asio::io_context ios;
+        auto server_handler = rudp_create(ios, ec);
+        if (ec) {
+            FERR("{}", ec);
+            return -1;
+        }
+        rudp_bind(server_handler, port, host, ec);
+        if (ec) {
+            FERR("{}", ec);
+            return -1;
+        }
+        async_rudp_wait_connect(
+            server_handler,
+            [&](Fundamental::error_code ec) {
+                if (ec) {
+                    FERR("unique server wait connection failed {}", ec);
+                    return;
+                }
+                FINFO("wait conenction success");
+                rudp_server_session::start_new_session(server_handler);
+            },
+            30000);
+        ios.run();
     } else {
         remote_port = arg_parser.GetValue("remote_port", remote_port);
         remote_host = arg_parser.GetValue("remote_host", remote_host);

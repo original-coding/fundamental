@@ -1755,6 +1755,7 @@ void rudp_client_context_imp::rudp_send(
             ec = error::make_error_code(error::rudp_errors::rudp_not_connected);
             break;
         }
+        FINFO("send {}", len);
         auto ret = ikcp_send(kcp_object.get(), static_cast<const char*>(buf), static_cast<std::int32_t>(len));
         if (0 == ret) break;
         if (ret < 0) {
