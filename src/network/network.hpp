@@ -154,19 +154,67 @@ struct protocal_helper {
         return asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port);
 #endif
     }
-    static void init_acceptor(asio::ip::tcp::acceptor& acceptor, std::uint16_t port) {
-        auto end_point = make_endpoint(port);
+    static asio::ip::udp::endpoint make_udp_endpoint(std::uint16_t port) {
+#ifndef NETWORK_IPV4_ONLY
+        return asio::ip::udp::endpoint(asio::ip::udp::v6(), port);
+#else
+        return asio::ip::udp::endpoint(asio::ip::udp::v4(), port);
+#endif
+    }
+    static std::error_code udp_bind_endpoint(asio::ip::udp::socket& udp_socket,
+                                             const asio::ip::udp::endpoint& end_point) {
+
+        std::error_code ec;
+        if (!udp_socket.is_open()) {
+            udp_socket.open(end_point.protocol(), ec);
+            if (ec) return ec;
+        }
+        if (end_point.port() != 0) udp_socket.set_option(asio::ip::udp::socket::reuse_address(true), ec);
+        if (ec) return ec;
+#ifndef NETWORK_IPV4_ONLY
+        std::error_code ignore_ec;
+        asio::ip::v6_only v6_option(false);
+        udp_socket.set_option(v6_option, ignore_ec);
+#endif
+        udp_socket.bind(end_point, ec);
+        return ec;
+    }
+
+    static std::error_code udp_bind_endpoint(asio::ip::udp::socket& udp_socket,
+                                             std::uint16_t port,
+                                             const std::string& address = "") {
+        asio::ip::udp::endpoint end_point;
+        if (!address.empty()) {
+            std::error_code ec;
+            auto bind_address = asio::ip::make_address(address, ec);
+            if (ec) return ec;
+            end_point = asio::ip::udp::endpoint(bind_address, port);
+        } else {
+            end_point = make_udp_endpoint(port);
+        }
+        return udp_bind_endpoint(udp_socket, end_point);
+    }
+
+    static void init_acceptor(asio::ip::tcp::acceptor& acceptor, std::uint16_t port, const std::string& address = "") {
+        asio::ip::tcp::endpoint end_point;
+        if (!address.empty()) {
+            auto bind_address = asio::ip::make_address(address);
+            end_point         = asio::ip::tcp::endpoint(bind_address, port);
+        } else {
+            end_point = make_endpoint(port);
+        }
         acceptor.open(end_point.protocol());
         acceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true));
 #ifndef NETWORK_IPV4_ONLY
+        std::error_code ec;
         asio::ip::v6_only v6_option(false);
-        acceptor.set_option(v6_option);
+        acceptor.set_option(v6_option, ec);
 #endif
         acceptor.bind(end_point);
         acceptor.listen();
     }
 };
-// ss -to | grep -i keepalive 
+// ss -to | grep -i keepalive
 inline void enable_tcp_keep_alive(asio::ip::tcp::socket& socket,
                                   bool enable               = true,
                                   std::int32_t idle_sec     = 30,

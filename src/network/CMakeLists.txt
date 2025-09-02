@@ -5,6 +5,10 @@ file(GLOB lib_source
     *.h
     *.cpp
     *.hpp
+    rudp/*.hpp
+    rudp/*.cpp
+    rudp/kcp_imp/*.h
+    rudp/kcp_imp/*.c
 )
 option(NETWORK_DISABLE_SSL "disable network ssl support." OFF)
 

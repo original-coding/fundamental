@@ -28,15 +28,45 @@ public:
     std::error_code(other.value(), other.category()), details__(std::move(other.details__)) {
     }
 
+    error_code(const std::error_code& other, std::string_view details="") :
+    std::error_code(other), details__(details) {
+    }
+
+    error_code(std::error_code&& other, std::string_view details="") noexcept :
+    std::error_code(std::move(other)), details__(std::move(details)) {
+    }
+
     error_code& operator=(const error_code& other) {
-        assign(other.value(), other.category());
+        std::error_code::assign(other.value(), other.category());
         details__ = other.details__;
         return *this;
     }
     error_code& operator=(error_code&& other)noexcept {
-        assign(other.value(), other.category());
+        std::error_code::assign(other.value(), other.category());
         other.clear();
         details__ = std::move(other.details__);
+        return *this;
+    }
+
+    error_code& operator=(const std::error_code& other) {
+        std::error_code::assign(other.value(), other.category());
+        return *this;
+    }
+
+    error_code& operator=(std::error_code&& other)noexcept {
+        std::error_code::assign(other.value(), other.category());
+        other.clear();
+        return *this;
+    }
+
+    error_code& assign(int v, const std::error_category& cat, std::string_view details)  noexcept{
+        std::error_code::assign(v, cat);
+        details__=details;
+        return *this;
+    }
+
+    error_code& assign_details(std::string_view details)noexcept{
+        details__=details;
         return *this;
     }
 
