@@ -28,9 +28,8 @@ static inline std::int64_t get_current_time() {
             .count());
 }
 static inline std::uint32_t get_clock_t() {
-    return static_cast<std::uint32_t>(get_current_time() & 0xffffffff);
+    return static_cast<std::uint32_t>(get_current_time());
 }
-
 } // namespace
 
 using rudp_id_t = std::uint32_t;
@@ -56,6 +55,13 @@ enum rudp_connection_status : std::uint32_t
     RUDP_SYN_SENT_STATUS  = 2,
     RUDP_SYN_RECV_STATUS  = 4,
     RUDP_CONNECTED_STATUS = 8,
+};
+
+enum rudp_force_update_status : std::size_t
+{
+    RUDP_FORCE_UPDATE_NONE,
+    RUDP_FORCE_UPDATE_REQUESTING,
+    RUDP_FORCE_UPDATE_PROCESSING
 };
 
 struct control_frame_data {
@@ -151,17 +157,17 @@ struct rudp_kernel {
     }
 
     constexpr static std::size_t kMaxRudpDescriptorNums        = 1024 * 1024;
-    constexpr static std::size_t kMaxRudpSocketCacheBufferNums = 512;
-    constexpr static std::size_t kMaxRudpProtocalCacheNums     = kMaxRudpSocketCacheBufferNums * 2;
+    constexpr static std::size_t kMaxRudpSocketCacheBufferNums = 1024 * 32;
+    constexpr static std::size_t kMaxRudpProtocalCacheNums     = kMaxRudpSocketCacheBufferNums;
     constexpr static std::size_t kMaxMtuSize                   = 32 * 1024;
     // system config
     inline static rudp_config_item kConnectTimeoutMs { 250, 10, 20000 };
     inline static rudp_config_item kCommandMaxTryCnt { 20, 2, 500 };
-    inline static rudp_config_item kMaxSendWindowSize { 128, 32, kMaxRudpProtocalCacheNums };
-    inline static rudp_config_item kMaxRecvWindowSize { 128, 32, kMaxRudpProtocalCacheNums };
+    inline static rudp_config_item kMaxSendWindowSize { 128, 2, kMaxRudpProtocalCacheNums };
+    inline static rudp_config_item kMaxRecvWindowSize { 128, 2, kMaxRudpProtocalCacheNums };
     inline static rudp_config_item kMtuSize { 1200, 64, kMaxMtuSize };
     inline static rudp_config_item kEnableNoDelay { 1, 0, 1 };
-    inline static rudp_config_item kUpdateIntervalMs { 10, 5, 200 };
+    inline static rudp_config_item kUpdateIntervalMs { 10, 1, 5000 };
     inline static rudp_config_item kResendSkipCnt { 0, 0, 10 };
     inline static rudp_config_item kEnbableNoCongestionControl { 1, 0, 1 };
     inline static rudp_config_item kEnbableAutoKeepAlive { 0, 0, 1 };
@@ -221,7 +227,7 @@ struct rudp_client_context_imp {
     void init_rudp_output();
     void notify_data_bytes_write(std::size_t len);
     void request_update_rudp_status();
-    void process_update_rudp_status();
+    void active_request_update_rudp_status();
     void comsume_remote_frames();
     void update_active_time();
     //
@@ -240,6 +246,7 @@ struct rudp_client_context_imp {
     void write_data(const void* data, std::size_t len);
     void write_data(std::vector<std::uint8_t>&& buf, bool is_control_frame = false);
     void flush_data();
+    void health_check();
     //
     rudp_socket* const socket_ref;
     std::unique_ptr<ikcpcb, release_kcp_wrapper> kcp_object;
@@ -249,6 +256,7 @@ struct rudp_client_context_imp {
     std::function<void(Fundamental::error_code)> closed_cb;
     std::function<void(Fundamental::error_code)> connected_cb;
     std::vector<std::uint8_t> socket_read_cache;
+    std::size_t read_token = 0;
 
     std::list<std::vector<std::uint8_t>> pending_control_frames;
     std::list<std::vector<std::uint8_t>> pending_data_frames;
@@ -257,11 +265,13 @@ struct rudp_client_context_imp {
 
     std::list<rudp_read_session> pending_rudp_read_requests;
     std::list<rudp_write_session> pending_rudp_write_requests;
+    std::int64_t last_rudp_update_time_point = std::numeric_limits<std::int64_t>::max();
     control_frame_data recv_control_frame;
     asio::steady_timer update_timer;
-    std::int64_t last_active_time_ms = 0;
-    std::size_t active_check_cnt     = 0;
-
+    std::int64_t last_active_time_ms                = 0;
+    rudp_force_update_status force_rudp_update_flag = rudp_force_update_status::RUDP_FORCE_UPDATE_NONE;
+    // health status check
+    asio::steady_timer health_check_timer;
     // timer for status check
     asio::steady_timer status_timer;
     std::uint8_t status_check_command        = 0;
@@ -684,6 +694,9 @@ void network::rudp::rudp_server_context_imp::peform() {
             if (!strong || !is_listening()) return;
             do {
                 if (ec) break;
+                if (len > 21) {
+                    FWARN("server recv {}", Fundamental::Utils::BufferToHex(recv_buf.data(), len));
+                }
                 if (filter_data(recv_buf.data(), len)) break;
                 if (len != control_frame_data::kRudpControlFrameSize) break;
                 if (!last_control_frame.decode(recv_buf.data(), len)) break;
@@ -903,6 +916,7 @@ void rudp_client_context_imp::destroy(Fundamental::error_code e) {
     pending_data_frames.clear();
     update_timer.cancel();
     status_timer.cancel();
+    health_check_timer.cancel();
 }
 
 void rudp_client_context_imp::set_status(rudp_connection_status dst_status, Fundamental::error_code ec) {
@@ -922,6 +936,7 @@ void rudp_client_context_imp::set_status(rudp_connection_status dst_status, Fund
             auto call_cb = std::move(connected_cb);
             if (call_cb) call_cb({});
             update_active_time();
+            health_check();
             request_update_rudp_status();
         }
     } break;
@@ -1078,12 +1093,16 @@ void rudp_client_context_imp::send_rst() {
 
 void rudp_client_context_imp::accept_assign_executor(asio::io_context& new_executor) {
     if (!is_connected()) return;
-    update_timer = std::move(asio::steady_timer(new_executor));
-    status_timer = std::move(asio::steady_timer(new_executor));
+    update_timer       = std::move(asio::steady_timer(new_executor));
+    status_timer       = std::move(asio::steady_timer(new_executor));
+    health_check_timer = std::move(asio::steady_timer(new_executor));
+    // update token to avoid call perform_read twice
+    ++read_token;
     asio::post(socket_ref->socket.get_executor(), [this, ref = socket_ref->weak_from_this()] {
         perform_read();
-        request_update_rudp_status();
+        health_check();
         restart_status_timer();
+        request_update_rudp_status();
     });
 }
 
@@ -1092,8 +1111,9 @@ void rudp_client_context_imp::restart_status_timer() {
     if (status_check_command == 0) return;
     status_timer.expires_after(std::chrono::milliseconds(socket_ref->connection_timeout_msec));
     status_timer.async_wait([this, ref = socket_ref->weak_from_this()](const asio::error_code& ec) {
+        if (ec) return;
         auto strong = ref.lock();
-        if (!strong || strong->is_closed() || ec) return;
+        if (!strong || strong->is_closed()) return;
         if (status_check_command == 0) return;
         ++status_check_command_try_cnt;
         if (status_check_command_try_cnt > socket_ref->command_max_try_cnt) {
@@ -1124,12 +1144,22 @@ static void __rudp_on_frame_sent__(int len, void* user) {
     imp->notify_data_bytes_write(static_cast<std::size_t>(len));
 }
 
+[[maybe_unused]] static void __rudp_log__(const char* log, struct IKCPCB* kcp, void* user) {
+    // just pending rudp data
+    rudp_client_context_imp* imp = static_cast<rudp_client_context_imp*>(user);
+    FINFO("rudp {} log:{}", imp->socket_ref->id_, log);
+}
+
 void rudp_client_context_imp::init_rudp_output() {
     FASSERT(kcp_object, "your should init kcp object first");
     ikcp_setoutput(kcp_object.get(), __rudp_output__);
     kcp_object.get()->notify_write = __rudp_on_frame_sent__;
     // set stream mode
     kcp_object.get()->stream = socket_ref->stream_mode ? 1 : 0;
+#if RUDP_RAW_DEBUG
+    kcp_object.get()->writelog = __rudp_log__;
+    kcp_object.get()->logmask  = 0xffffffff;
+#endif
     ikcp_setmtu(kcp_object.get(), static_cast<std::int32_t>(socket_ref->mtu_size));
     ikcp_wndsize(kcp_object.get(), static_cast<std::int32_t>(socket_ref->send_window_size),
                  static_cast<std::int32_t>(socket_ref->recv_window_size));
@@ -1155,48 +1185,60 @@ void rudp_client_context_imp::notify_data_bytes_write(std::size_t len) {
         }
     }
 }
-void rudp_client_context_imp::process_update_rudp_status() {
-    ikcp_update(kcp_object.get(), get_clock_t());
-    auto protocal_cache_size = ikcp_waitsnd(kcp_object.get());
-    if (static_cast<std::size_t>(protocal_cache_size) > rudp_kernel::kMaxRudpProtocalCacheNums) {
-        FWARN("send cache size:{}  is overflow {},your should control send interval or check the network "
-              "status,active disconnect",
-              protocal_cache_size, rudp_kernel::kMaxRudpProtocalCacheNums);
-        socket_ref->destroy(error::make_error_code(
-            error::rudp_errors::rudp_failed,
-            "rudp protocal cache overflow,maybe network is too poor for your data transmission efficiency"));
-    }
-}
 
 void rudp_client_context_imp::request_update_rudp_status() {
     if (!is_connected()) return;
-    ++active_check_cnt;
     // check active time for idle connections
-    if (0 == (active_check_cnt % 20)) {
-        auto now = get_current_time();
-        if (now > last_active_time_ms &&
-            static_cast<std::size_t>(now - last_active_time_ms) > socket_ref->max_connection_idle_time) {
-            socket_ref->destroy(
-                error::make_error_code(error::rudp_errors::rudp_timed_out, "actively broke idle connections "));
-            FWARN("disconnect rudp connection[{}:{}] for idle check {} > {} ", socket_ref->id_, remote_id,
-                  now - last_active_time_ms, socket_ref->max_connection_idle_time.current_value);
-            return;
-        }
-    }
-    auto current_ts = get_clock_t();
+    auto now        = get_current_time();
+    auto current_ts = static_cast<std::uint32_t>(now & 0xffffffff);
     auto update_ts  = ikcp_check(kcp_object.get(), current_ts);
     // check time loopback
     auto diff_time_ms = update_ts >= current_ts ? update_ts - current_ts
                                                 : (std::numeric_limits<std::uint32_t>::max() - current_ts + update_ts);
+    // send/recv will process this step
+    if (force_rudp_update_flag == rudp_force_update_status::RUDP_FORCE_UPDATE_REQUESTING) {
+        constexpr std::uint32_t kActiveRequestInterval = 1;
+        if (diff_time_ms > kActiveRequestInterval) {
+            diff_time_ms = kActiveRequestInterval;
+            update_ts    = current_ts + diff_time_ms;
+        }
+        force_rudp_update_flag = rudp_force_update_status::RUDP_FORCE_UPDATE_PROCESSING;
+    } else {
+        // no active request
+        diff_time_ms = kcp_object->interval;
+        update_ts    = current_ts + diff_time_ms;
+    }
     update_timer.cancel();
     update_timer.expires_after(std::chrono::milliseconds(diff_time_ms));
-    update_timer.async_wait([this, ref = socket_ref->weak_from_this()](std::error_code ec) {
+    update_timer.async_wait([this, ref = socket_ref->weak_from_this(), update_ts](std::error_code ec) {
+        if (ec) return;
         // maybe canceled
         auto strong = ref.lock();
-        if (!strong || ec) return;
-        process_update_rudp_status();
+        if (!strong) return;
+        ikcp_update(kcp_object.get(), update_ts);
+        if (force_rudp_update_flag == rudp_force_update_status::RUDP_FORCE_UPDATE_PROCESSING) {
+            ikcp_flush(kcp_object.get());
+        }
+        force_rudp_update_flag   = rudp_force_update_status::RUDP_FORCE_UPDATE_NONE;
+        auto protocal_cache_size = ikcp_waitsnd(kcp_object.get());
+        if (static_cast<std::size_t>(protocal_cache_size) > rudp_kernel::kMaxRudpProtocalCacheNums) {
+            FWARN("send cache size:{}  is overflow {},your should control send interval or check the network "
+                  "status,active disconnect",
+                  protocal_cache_size, rudp_kernel::kMaxRudpProtocalCacheNums);
+            socket_ref->destroy(error::make_error_code(
+                error::rudp_errors::rudp_failed,
+                "rudp protocal cache overflow,maybe network is too poor for your data transmission efficiency"));
+        }
         request_update_rudp_status();
     });
+}
+
+void rudp_client_context_imp::active_request_update_rudp_status() {
+    ikcp_update(kcp_object.get(), get_clock_t());
+    if (force_rudp_update_flag == rudp_force_update_status::RUDP_FORCE_UPDATE_NONE) {
+        force_rudp_update_flag = rudp_force_update_status::RUDP_FORCE_UPDATE_REQUESTING;
+        request_update_rudp_status();
+    }
 }
 
 void rudp_client_context_imp::comsume_remote_frames() {
@@ -1264,21 +1306,27 @@ void rudp_client_context_imp::perform_read() {
     if (!is_active()) return;
     socket_ref->socket.async_receive(
         asio::buffer(socket_read_cache.data(), socket_read_cache.size()),
-        [this, ref = socket_ref->weak_from_this()](std::error_code ec, std::size_t len) {
+        [this, ref = socket_ref->weak_from_this(), token = read_token](std::error_code ec, std::size_t len) {
             auto strong = ref.lock();
             if (!strong || !is_active()) return;
             if (!socket_ref->socket.is_open()) return;
+
             if (ec && ec.value() != static_cast<std::int32_t>(std::errc::operation_canceled)) {
                 FDEBUG("read size:[{}/{}] from {}:{} failed for {}:{}", len, socket_read_cache.size(),
                        strong->remote_endpoint.address().to_string(), strong->remote_endpoint.port(), ec.value(),
                        ec.message());
             }
-            Fundamental::ScopeGuard g([&]() { perform_read(); });
+            Fundamental::ScopeGuard g([&]() {
+                // token has been changed
+                if (token != read_token) return;
+                perform_read();
+            });
             process_read_data(socket_read_cache.data(), len);
         });
 }
 
 void rudp_client_context_imp::process_read_data(const std::uint8_t* data, std::size_t read_size) {
+    FDEBUG("rudp:{} read {} bytes", socket_ref->id_, read_size);
     if (read_size == control_frame_data::kRudpControlFrameSize) {
         process_control_frame(data);
 
@@ -1304,8 +1352,8 @@ void rudp_client_context_imp::process_rudp_data_frame(const std::uint8_t* data, 
     // ignore invalid data
     if (ret != 0) return;
     update_active_time();
-    process_update_rudp_status();
     comsume_remote_frames();
+    active_request_update_rudp_status();
 }
 
 void rudp_client_context_imp::process_control_frame(const std::uint8_t* data) {
@@ -1481,8 +1529,32 @@ void rudp_client_context_imp::flush_data() {
                                   });
 }
 
+void rudp_client_context_imp::health_check() {
+    if (!is_connected()) return;
+    // check active time for idle connections
+    auto now = get_current_time();
+    if (now > last_active_time_ms &&
+        static_cast<std::size_t>(now - last_active_time_ms) > socket_ref->max_connection_idle_time) {
+        socket_ref->destroy(
+            error::make_error_code(error::rudp_errors::rudp_timed_out, "actively broke idle connections "));
+        FWARN("disconnect rudp connection[{}:{}] for idle check {} > {} ", socket_ref->id_, remote_id,
+              now - last_active_time_ms, socket_ref->max_connection_idle_time.current_value);
+        return;
+    }
+    health_check_timer.cancel();
+    health_check_timer.expires_after(std::chrono::milliseconds(socket_ref->max_connection_idle_time));
+    health_check_timer.async_wait([this, ref = socket_ref->weak_from_this()](std::error_code ec) {
+        if (ec) return;
+        // maybe canceled
+        auto strong = ref.lock();
+        if (!strong) return;
+        health_check();
+    });
+}
+
 rudp_client_context_imp::rudp_client_context_imp(rudp_socket* parent) :
-socket_ref(parent), update_timer(parent->get_executor()), status_timer(parent->get_executor()) {
+socket_ref(parent), update_timer(parent->get_executor()), health_check_timer(parent->get_executor()),
+status_timer(parent->get_executor()) {
     socket_read_cache.resize(control_frame_data::kRudpControlFrameSize);
 }
 
@@ -1552,7 +1624,7 @@ void rudp_client_context_imp::rudp_send(
         auto& session         = pending_rudp_write_requests.emplace_back();
         session.data_len      = static_cast<std::size_t>(ret);
         session.complete_func = complete_func;
-        process_update_rudp_status();
+        active_request_update_rudp_status();
         return;
     } while (0);
     if (complete_func) complete_func(0, ec);

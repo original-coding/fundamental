@@ -509,15 +509,16 @@ TEST(rudp_test, test_stream_mode) {
 #endif
 TEST(rudp_test, benchmark) {
     Fundamental::error_code ec;
-    std::size_t data_chunk_size = 1200;
-    std::size_t window_size     = 128;
+    std::size_t data_chunk_size = 1024 - kRudpProtocalHeadSize;
+    std::size_t window_size     = 256;
+    std::size_t update_interval = 10;
     auto server_handler         = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
     rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
     rudp_config(server_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
     rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
     rudp_config(server_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, window_size);
     rudp_config(server_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, window_size);
-    rudp_config(server_handler, rudp_config_type::RUDP_UPDATE_INTERVAL_MS, 10);
+    rudp_config(server_handler, rudp_config_type::RUDP_UPDATE_INTERVAL_MS, update_interval);
     rudp_bind(server_handler, 42000, "::", ec);
     rudp_listen(server_handler, 10, ec);
     std::promise<rudp_handle_t> accept_promise;
@@ -532,7 +533,7 @@ TEST(rudp_test, benchmark) {
     rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
     rudp_config(client_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, window_size);
     rudp_config(client_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, window_size);
-    rudp_config(client_handler, rudp_config_type::RUDP_UPDATE_INTERVAL_MS, 10);
+    rudp_config(client_handler, rudp_config_type::RUDP_UPDATE_INTERVAL_MS, update_interval);
 
     rudp_bind(client_handler, 0, "127.0.0.1", ec);
     std::promise<void> connect_promise;
@@ -544,8 +545,8 @@ TEST(rudp_test, benchmark) {
     auto remote_handler = accept_promise.get_future().get();
     FINFO("start rudp benckmark");
     auto now              = Fundamental::Timer::GetTimeNow();
-    std::size_t send_nums = 1024 * 1024; // 1M
-    auto group_size       = window_size / 2;
+    std::size_t send_nums = 64 * 1024; // 1M
+    auto group_size       = 128;
     auto send_task_token  = Fundamental::ThreadPool::DefaultPool().Enqueue([&]() {
         std::string send_data(data_chunk_size * group_size, 'c');
         std::promise<void> send_promise;
@@ -557,7 +558,6 @@ TEST(rudp_test, benchmark) {
             --left_times;
             async_rudp_send(client_handler, send_data.data(), send_data.size(),
                              [left_times, self](std::size_t len, Fundamental::error_code ec) {
-                                if (left_times % 100 == 0) FINFO("send:{}  {}", left_times, len);
                                 EXPECT_TRUE(!ec);
                                 self(self, left_times);
                             });
@@ -577,7 +577,6 @@ TEST(rudp_test, benchmark) {
             --left_times;
             async_rudp_recv(remote_handler, recv_data.data(), recv_data.size(),
                              [left_times, self](std::size_t len, Fundamental::error_code ec) {
-                                if (left_times % 100 == 0) FINFO("recv:{}  {}", left_times, len);
                                 EXPECT_TRUE(!ec);
                                 self(self, left_times);
                             });
