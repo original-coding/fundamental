@@ -283,6 +283,7 @@ struct IKCPCB {
     IUINT32 nodelay, updated;
     IUINT32 ts_probe, probe_wait;
     IUINT32 dead_link, incr;
+    IUINT32 dirty_nums;
     struct IQUEUEHEAD snd_queue;
     struct IQUEUEHEAD rcv_queue;
     struct IQUEUEHEAD snd_buf;

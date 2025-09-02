@@ -22,29 +22,33 @@
 //=====================================================================
 // KCP BASIC
 //=====================================================================
-const IUINT32 IKCP_RTO_NDL       = 30;  // no delay min rto
-const IUINT32 IKCP_RTO_MIN       = 100; // normal min rto
-const IUINT32 IKCP_RTO_DEF       = 200;
-const IUINT32 IKCP_RTO_MAX       = 60000;
-const IUINT32 IKCP_CMD_PUSH      = 81; // cmd: push data
-const IUINT32 IKCP_CMD_ACK       = 82; // cmd: ack
-const IUINT32 IKCP_CMD_WASK      = 83; // cmd: window probe (ask)
-const IUINT32 IKCP_CMD_WINS      = 84; // cmd: window size (tell)
-const IUINT32 IKCP_ASK_SEND      = 1;  // need to send IKCP_CMD_WASK
-const IUINT32 IKCP_ASK_TELL      = 2;  // need to send IKCP_CMD_WINS
-const IUINT32 IKCP_WND_SND       = 32;
-const IUINT32 IKCP_WND_RCV       = 128; // must >= max fragment size
-const IUINT32 IKCP_MTU_DEF       = 1400;
-const IUINT32 IKCP_ACK_FAST      = 3;
-const IUINT32 IKCP_INTERVAL      = 100;
-const IUINT32 IKCP_OVERHEAD      = 24;
-const IUINT32 IKCP_DEADLINK      = 20;
-const IUINT32 IKCP_THRESH_INIT   = 2;
-const IUINT32 IKCP_THRESH_MIN    = 2;
-const IUINT32 IKCP_PROBE_INIT    = 7000;   // 7 secs to probe window size
-const IUINT32 IKCP_PROBE_LIMIT   = 120000; // up to 120 secs to probe window
-const IUINT32 IKCP_FASTACK_LIMIT = 5;      // max times to trigger fastack
-
+const IUINT32 IKCP_RTO_NDL              = 30;  // no delay min rto
+const IUINT32 IKCP_RTO_MIN              = 100; // normal min rto
+const IUINT32 IKCP_RTO_DEF              = 200;
+const IUINT32 IKCP_RTO_MAX              = 60000;
+const IUINT32 IKCP_CMD_PUSH             = 81; // cmd: push data
+const IUINT32 IKCP_CMD_ACK              = 82; // cmd: ack
+const IUINT32 IKCP_CMD_WASK             = 83; // cmd: window probe (ask)
+const IUINT32 IKCP_CMD_WINS             = 84; // cmd: window size (tell)
+const IUINT32 IKCP_ASK_SEND             = 1;  // need to send IKCP_CMD_WASK
+const IUINT32 IKCP_ASK_TELL             = 2;  // need to send IKCP_CMD_WINS
+const IUINT32 IKCP_WND_SND_DEFAULT      = 32;
+const IUINT32 IKCP_WND_RCV_DEFAULT      = 128; // must >= max fragment size
+const IUINT32 IKCP_WND_MAX              = 32 * 1024;
+const IUINT32 IKCP_WND_MIN              = 2;
+const IUINT32 IKCP_MTU_DEF              = 1400;
+const IUINT32 IKCP_ACK_FAST             = 3;
+const IUINT32 IKCP_INTERVAL             = 100;
+const int IKCP_MIN_INTERVAL             = 1;
+const int IKCP_MAX_INTERVAL             = 5000;
+const IUINT32 IKCP_OVERHEAD             = 24;
+const IUINT32 IKCP_DEADLINK             = 20;
+const IUINT32 IKCP_THRESH_INIT          = 2;
+const IUINT32 IKCP_THRESH_MIN           = 2;
+const IUINT32 IKCP_PROBE_INIT           = 7000;   // 7 secs to probe window size
+const IUINT32 IKCP_PROBE_LIMIT          = 120000; // up to 120 secs to probe window
+const IUINT32 IKCP_FASTACK_LIMIT        = 5;      // max times to trigger fastack
+const IUINT32 IKCP_FAST_FLUSH_THRESHOLD = 64;     // threshold nums for kcp to force flushing quickly
 //---------------------------------------------------------------------
 // encode / decode
 //---------------------------------------------------------------------
@@ -225,17 +229,17 @@ ikcpcb* ikcp_create(IUINT32 conv, void* user) {
     kcp->ts_lastack = 0;
     kcp->ts_probe   = 0;
     kcp->probe_wait = 0;
-    kcp->snd_wnd    = IKCP_WND_SND;
-    kcp->rcv_wnd    = IKCP_WND_RCV;
-    kcp->rmt_wnd    = IKCP_WND_RCV;
+    kcp->snd_wnd    = IKCP_WND_SND_DEFAULT;
+    kcp->rcv_wnd    = IKCP_WND_RCV_DEFAULT;
+    kcp->rmt_wnd    = IKCP_WND_RCV_DEFAULT;
     kcp->cwnd       = 0;
     kcp->incr       = 0;
     kcp->probe      = 0;
     kcp->mtu        = IKCP_MTU_DEF;
     kcp->mss        = kcp->mtu - IKCP_OVERHEAD;
     kcp->stream     = 0;
-
-    kcp->buffer = (char*)ikcp_malloc((kcp->mtu + IKCP_OVERHEAD) * 3);
+    kcp->dirty_nums = 0;
+    kcp->buffer     = (char*)ikcp_malloc((kcp->mtu + IKCP_OVERHEAD) * 3);
     if (kcp->buffer == NULL) {
         ikcp_free(kcp);
         return NULL;
@@ -510,7 +514,7 @@ int ikcp_send(ikcpcb* kcp, const char* buffer, int len) {
         len -= size;
         sent += size;
     }
-
+    kcp->dirty_nums += (IUINT32)count;
     return sent;
 }
 
@@ -728,7 +732,6 @@ int ikcp_input(ikcpcb* kcp, const char* data, long size) {
     }
 
     if (data == NULL || (int)size < (int)IKCP_OVERHEAD) return -1;
-
     while (1) {
         IUINT32 ts, sn, len, una, conv;
         IUINT16 wnd;
@@ -827,6 +830,7 @@ int ikcp_input(ikcpcb* kcp, const char* data, long size) {
 
         data += len;
         size -= len;
+        ++kcp->dirty_nums;
     }
 
     if (flag != 0) {
@@ -982,11 +986,15 @@ void ikcp_flush(ikcpcb* kcp) {
         kcp->nsnd_que--;
         kcp->nsnd_buf++;
 
-        newseg->conv     = kcp->conv;
-        newseg->cmd      = IKCP_CMD_PUSH;
-        newseg->wnd      = seg.wnd;
-        newseg->ts       = current;
-        newseg->sn       = kcp->snd_nxt++;
+        newseg->conv = kcp->conv;
+        newseg->cmd  = IKCP_CMD_PUSH;
+        newseg->wnd  = seg.wnd;
+        newseg->ts   = current;
+        newseg->sn   = kcp->snd_nxt++;
+        if (ikcp_canlog(kcp, IKCP_LOG_SEND)) {
+            ikcp_log(kcp, IKCP_LOG_SEND, "enque output psh: sn=%lu ts=%lu", (unsigned long)newseg->sn,
+                     (unsigned long)newseg->ts);
+        }
         newseg->una      = kcp->rcv_nxt;
         newseg->resendts = current;
         newseg->rto      = kcp->rx_rto;
@@ -1046,6 +1054,10 @@ void ikcp_flush(ikcpcb* kcp) {
             ptr = ikcp_encode_seg(ptr, segment);
 
             if (segment->len > 0) {
+                if (ikcp_canlog(kcp, IKCP_LOG_SEND)) {
+                    ikcp_log(kcp, IKCP_LOG_SEND, "write output psh: sn=%lu ts=%lu", (unsigned long)segment->sn,
+                             (unsigned long)segment->ts);
+                }
                 memcpy(ptr, segment->data, segment->len);
                 ptr += segment->len;
             }
@@ -1105,12 +1117,19 @@ void ikcp_update(ikcpcb* kcp, IUINT32 current) {
         kcp->ts_flush = kcp->current;
         slap          = 0;
     }
-
+    // quickly update
+    if (kcp->dirty_nums > IKCP_FAST_FLUSH_THRESHOLD) {
+        slap            = 0;
+        kcp->dirty_nums = 0;
+    }
     if (slap >= 0) {
         kcp->ts_flush += kcp->interval;
-        if (_itimediff(kcp->current, kcp->ts_flush) >= 0) {
+        // correct ts_flush sync
+        long diff = _itimediff(kcp->current, kcp->ts_flush);
+        if (diff >= 0 || (diff + (long)kcp->rx_rto) < 0) {
             kcp->ts_flush = kcp->current + kcp->interval;
         }
+
         ikcp_flush(kcp);
     }
 }
@@ -1144,7 +1163,7 @@ IUINT32 ikcp_check(const ikcpcb* kcp, IUINT32 current) {
     }
 
     tm_flush = _itimediff(ts_flush, current);
-
+    // search resend packet
     for (p = kcp->snd_buf.next; p != &kcp->snd_buf; p = p->next) {
         const IKCPSEG* seg = iqueue_entry(p, const IKCPSEG, node);
         IINT32 diff        = _itimediff(seg->resendts, current);
@@ -1156,7 +1175,6 @@ IUINT32 ikcp_check(const ikcpcb* kcp, IUINT32 current) {
 
     minimal = (IUINT32)(tm_packet < tm_flush ? tm_packet : tm_flush);
     if (minimal >= kcp->interval) minimal = kcp->interval;
-
     return current + minimal;
 }
 
@@ -1173,10 +1191,10 @@ int ikcp_setmtu(ikcpcb* kcp, int mtu) {
 }
 
 int ikcp_interval(ikcpcb* kcp, int interval) {
-    if (interval > 5000)
-        interval = 5000;
-    else if (interval < 10)
-        interval = 10;
+    if (interval > IKCP_MAX_INTERVAL)
+        interval = IKCP_MAX_INTERVAL;
+    else if (interval < IKCP_MIN_INTERVAL)
+        interval = IKCP_MIN_INTERVAL;
     kcp->interval = interval;
     return 0;
 }
@@ -1191,10 +1209,10 @@ int ikcp_nodelay(ikcpcb* kcp, int nodelay, int interval, int resend, int nc) {
         }
     }
     if (interval >= 0) {
-        if (interval > 5000)
-            interval = 5000;
-        else if (interval < 10)
-            interval = 10;
+        if (interval > IKCP_MAX_INTERVAL)
+            interval = IKCP_MAX_INTERVAL;
+        else if (interval < IKCP_MIN_INTERVAL)
+            interval = IKCP_MIN_INTERVAL;
         kcp->interval = interval;
     }
     if (resend >= 0) {
@@ -1209,10 +1227,10 @@ int ikcp_nodelay(ikcpcb* kcp, int nodelay, int interval, int resend, int nc) {
 int ikcp_wndsize(ikcpcb* kcp, int sndwnd, int rcvwnd) {
     if (kcp) {
         if (sndwnd > 0) {
-            kcp->snd_wnd = sndwnd;
+            kcp->snd_wnd = _imin_(_imax_((IUINT32)sndwnd, IKCP_WND_MIN), IKCP_WND_MAX);
         }
         if (rcvwnd > 0) { // must >= max fragment size
-            kcp->rcv_wnd = _imax_(rcvwnd, IKCP_WND_RCV);
+            kcp->rcv_wnd = _imin_(_imax_((IUINT32)rcvwnd, IKCP_WND_MIN), IKCP_WND_MAX);
         }
     }
     return 0;
