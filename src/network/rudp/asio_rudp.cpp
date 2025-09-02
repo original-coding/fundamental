@@ -694,9 +694,6 @@ void network::rudp::rudp_server_context_imp::peform() {
             if (!strong || !is_listening()) return;
             do {
                 if (ec) break;
-                if (len > 21) {
-                    FWARN("server recv {}", Fundamental::Utils::BufferToHex(recv_buf.data(), len));
-                }
                 if (filter_data(recv_buf.data(), len)) break;
                 if (len != control_frame_data::kRudpControlFrameSize) break;
                 if (!last_control_frame.decode(recv_buf.data(), len)) break;
