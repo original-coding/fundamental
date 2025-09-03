@@ -5,98 +5,258 @@ fundamental kits for develper
 # 目录结构
 ```
 .
-├── .clang-format
-├── .gitignore
-├── .gitmodules
 ├── CMakeLists.txt
 ├── LICENSE.txt
 ├── README.md
-├── build-linux     release 构建目录
-├── build-linux-debug debug构建目录
-├── cmake    cmake文件目录
-│   ├── TemplateLib.cmake.in  库导出模板
-│   ├── config-target.cmake   配置target的相关函数声明
-│   ├── import_gtest_config.cmake  gtest导入相关配置
-│   ├── lib-deploy.cmake    自定义库安装相关配置
-│   ├── platform.h.in   c++编译precompile头，可参考此文件的方式添加自己的预编译头
-│   └── reflect-helper.cmake 反射注册辅助函数
-├── samples   测试用例
-│   ├── CMakeLists.txt
-│   ├── GtestSample   gtest库导入测试
-│   ├── TestApplication application流程测试
-│   ├── TestAsio   asio库导入测试
-│   ├── TestBasic  c++环境测试
-│   ├── TestDelayQueue    定时器测试
-│   ├── TestEvents   事件测试
-│   ├── TestLog   日志测试
-│   ├── TestMemoryTracker  内存跟踪测试
-│   ├── TestParallel  并行单元测试
-│   ├── TestProxyServer   转发服务及客户端
-│   ├── TestRttr   rttr反射测试
-│   └── TestTrafficProxy  流量代理客户端
-├── test-gen-linux-debug.sh  debug版本构建脚本
-├── test-gen-linux.sh    release版本构建脚本
-└── third-parties 三方库源码目录
-    ├── CMakeLists.txt
-    ├── asio-source   
-    ├── eventpp-source   
-    ├── nlohmann-source
-    ├── rttr-source
-    └── spdlog-source
-./src/
+├── applications 应用示例
+├── assets 资源目录
+├── build-linux release-with-debuginfo构建目录
+├── build-linux-debug debug构建输出目录
+├── cmake   cmake文件放置目录
+├── cmake-gen-win.bat  windows vs工程生成脚本
+├── samples  测试用例目录
+├── scripts 常用脚本文件目录
+├── src 项目库源码目录
+├── test-gen-linux-debug-with-clang.sh
+├── test-gen-linux-debug.sh
+├── test-gen-linux-release-no-optimize.sh
+├── test-gen-linux-release.sh
+├── test-gen-linux.sh
+├── test-install.sh
+├── third-parties 三方库目录
+├── vcpkg-help.md
+└── vcpkg.json
+
+applications/
 ├── CMakeLists.txt
-├── fundamental   基础组件
+├── rudp_delay_test_server  rudp延迟测试服务
+└── tcp_custom_proxy_server socks5代理服务
+
+cmake
+├── TemplateLib.cmake.in 
+├── clang-tidy-helper.cmake
+├── config-target.cmake  通用项目配置
+├── env-check.cmake  C++运行环境检查
+├── import_benchmark_config.cmake benchmark导入配置
+├── import_gtest_config.cmake gtest导入配置
+├── lib-deploy.cmake 库/安装
+├── patch-helper.cmake patch规则
+├── platform.h.in
+├── reflect-helper.cmake
+└── source_import_config.cmake 当前项目cmake配置项
+
+src/
+├── CMakeLists.txt
+├── database
 │   ├── CMakeLists.txt
-│   ├── application   应用程序启动流程标准化定义
+│   ├── dummy.cpp
+│   ├── rocksdb
+│   └── sqlite3
+├── fundamental
+│   ├── CMakeLists.txt
+│   ├── algorithm
+│   ├── application
+│   ├── basic
+│   ├── data_storage
+│   ├── delay_queue
+│   ├── events
+│   ├── process
+│   ├── read_write_queue
+│   ├── rttr_handler
+│   ├── thread_pool
+│   └── tracker
+├── http
+│   ├── CMakeLists.txt
+│   ├── http_connection.h
+│   ├── http_definitions.cpp
+│   ├── http_definitions.hpp
+│   ├── http_request.cpp
+│   ├── http_request.hpp
+│   ├── http_response.cpp
+│   ├── http_response.hpp
+│   ├── http_router.cpp
+│   ├── http_router.hpp
+│   ├── http_server.cpp
+│   └── http_server.hpp
+├── network
+│   ├── CMakeLists.txt
+│   ├── io_context_pool.cpp
+│   ├── io_context_pool.hpp
+│   ├── network.hpp
+│   ├── rudp
+│   ├── upgrade_interface.hpp
+│   └── use_asio.hpp
+└── rpc
+    ├── CMakeLists.txt
+    ├── basic
+    ├── connection.cpp
+    ├── connection.h
+    ├── proxy
+    ├── rpc_client.hpp
+    └── rpc_server.hpp
+
+src/
+├── CMakeLists.txt
+├── database
+│   ├── CMakeLists.txt
+│   ├── dummy.cpp
+│   ├── rocksdb
+│   │   └── dummy.cpp
+│   └── sqlite3   sqlite3数据库操作c++封装
+│       ├── sqlite-common.hpp
+│       ├── sqlite.hpp
+│       └── sqliteext.hpp
+├── fundamental
+│   ├── CMakeLists.txt
+│   ├── algorithm  range/hash操作
+│   │   ├── common.hpp
+│   │   ├── hash.hpp
+│   │   ├── range_set.hpp
+│   │   └── wyhash_utils.hpp
+│   ├── application  应用资源管理
 │   │   ├── application.cpp
 │   │   └── application.hpp
-│   ├── basic  
-│   │   ├── buffer.hpp  自定义buffer
-│   │   ├── log.cpp 
-│   │   ├── log.h   spdlog封装logger
-│   │   ├── parallel.cpp
-│   │   ├── parallel.hpp  并行封装,基于thread_pol
+│   ├── basic
+│   │   ├── allocator.hpp  内存分配器
+│   │   ├── arg_parser.hpp 命令行解析
+│   │   ├── base64_utils.hpp
+│   │   ├── buffer.hpp  buffer实现
+│   │   ├── compress_utils.hpp 多线程压缩/zip格式封装
+│   │   ├── cxx_config_include.hpp 
+│   │   ├── endian_utils.hpp 大小端处理
+│   │   ├── error_code.hpp  错误码定义
+│   │   ├── filesystem_utils.hpp 文件读/写
+│   │   ├── integer_codec.hpp 整数编码
+│   │   ├── log.cpp
+│   │   ├── log.h   日志宏
+│   │   ├── md5_utils.hpp  md5
+│   │   ├── mutext_utils.hpp 文件锁
+│   │   ├── parallel.hpp 多线程并发执行
+│   │   ├── random_generator.hpp 随机数生成
+│   │   ├── string_utils.hpp 字符串处理
+│   │   ├── url_utils.hpp url处理
 │   │   ├── utils.cpp
-│   │   └── utils.hpp  常用的utils
-│   ├── delay_queue  定时器事件实现
+│   │   ├── utils.hpp 常用工具实现
+│   │   └── uuid_utils.hpp
+│   ├── data_storage 数据读写
+│   │   ├── data_storage.hpp
+│   │   ├── data_storage_interface.hpp
+│   │   ├── memory_data_storage.hpp
+│   │   └── object_definitions.h
+│   ├── delay_queue 定时器
 │   │   ├── delay_queue.cpp
 │   │   └── delay_queue.h
-│   ├── events   基于eventpp异步事件/同步信号定义
+│   ├── events 事件/信号槽
 │   │   ├── event.h
 │   │   ├── event_process.cpp
-│   │   ├── event_process.h 应用层事件/信号定义
+│   │   ├── event_process.h
 │   │   ├── event_system.cpp
-│   │   └── event_system.h  事件系统封装
-│   ├── rttr_handler  基于rttr及nlohmann-json的序列化实现
+│   │   └── event_system.h
+│   ├── process 程序状态
+│   │   ├── process_status.cc
+│   │   └── process_status.h
+│   ├── read_write_queue 线程安全无锁队列
+│   │   ├── atomicops.h
+│   │   ├── queue_with_locker.hpp
+│   │   ├── readerwritercircularbuffer.h
+│   │   └── readerwriterqueue.h
+│   ├── rttr_handler 序列化/反序列化/反射
+│   │   ├── binary_packer.cpp
+│   │   ├── binary_packer.h
 │   │   ├── deserializer.cpp
-│   │   ├── deserializer.h   序列化
+│   │   ├── deserializer.h
 │   │   ├── meta_control.cpp
-│   │   ├── meta_control.h  序列化反序列化流程控制
+│   │   ├── meta_control.h
+│   │   ├── script_support
+│   │   │   └── chaiscript_visitor.h
 │   │   ├── serializer.cpp
-│   │   └── serializer.h  反序列化
-│   ├── thread_pool  可取消等待中任务/提供future的线程池实现
+│   │   └── serializer.h
+│   ├── thread_pool 线程池
 │   │   ├── thread_pool.cpp
 │   │   └── thread_pool.h
-│   └── tracker  
-│       └── memory_tracker.hpp  内存分配跟踪器基类
-└── network  基于asio的网络模块实现
+│   └── tracker
+│       ├── memory_tracker.cpp
+│       ├── memory_tracker.hpp
+│       └── time_tracker.hpp
+├── http http服务器实现
+│   ├── CMakeLists.txt
+│   ├── http_connection.h
+│   ├── http_definitions.cpp
+│   ├── http_definitions.hpp
+│   ├── http_request.cpp
+│   ├── http_request.hpp
+│   ├── http_response.cpp
+│   ├── http_response.hpp
+│   ├── http_router.cpp
+│   ├── http_router.hpp
+│   ├── http_server.cpp
+│   └── http_server.hpp
+├── network
+│   ├── CMakeLists.txt
+│   ├── io_context_pool.cpp
+│   ├── io_context_pool.hpp
+│   ├── network.hpp
+│   ├── rudp  rudp协议实现
+│   │   ├── asio_rudp.cpp
+│   │   ├── asio_rudp.hpp
+│   │   ├── asio_rudp_definitions.hpp
+│   │   ├── kcp_imp
+│   │   │   ├── LICENSE
+│   │   │   ├── ikcp.c
+│   │   │   └── ikcp.h
+│   │   └── readme.md
+│   ├── upgrade_interface.hpp
+│   └── use_asio.hpp
+└── rpc 自定义rpc/socks5/自定义代理
     ├── CMakeLists.txt
-    ├── server  
-    │   ├── basic_server.hpp  通用tcp服务器声明
-    │   ├── io_context_pool.cpp 
-    │   └── io_context_pool.hpp  asio-io-context-pool实现，基于thread_pool
-    └── services 基于basic_server的echo实例
-        ├── echo
-        └── proxy_server 多服务共用端口的server实现
-            ├── agent_service  数据存储/查询服务实现
-            ├── proxy_connection.cpp
-            ├── proxy_connection.hpp
-            ├── proxy_defines.h proxy数据格式定义
-            ├── proxy_encode.h  prxoy数据编码
-            ├── proxy_request_handler.cpp
-            ├── proxy_request_handler.hpp proxy数据处理
-            ├── readMe.md
-            └── traffic_proxy_service   流量代理服务实现
+    ├── basic
+    │   ├── client_util.hpp
+    │   ├── codec.h
+    │   ├── const_vars.h
+    │   ├── md5.hpp
+    │   ├── meta_util.hpp
+    │   └── router.hpp
+    ├── connection.cpp
+    ├── connection.h
+    ├── proxy
+    │   ├── protocal_pipe
+    │   │   ├── forward_pipe_codec.hpp
+    │   │   ├── pipe_connection_upgrade_session.hpp
+    │   │   ├── protocal_pipe_connection.cpp
+    │   │   └── protocal_pipe_connection.hpp
+    │   ├── proxy_buffer.cpp
+    │   ├── proxy_buffer.hpp
+    │   ├── proxy_defines.h
+    │   ├── proxy_manager.cpp
+    │   ├── proxy_manager.hpp
+    │   ├── rpc_forward_connection.cpp
+    │   ├── rpc_forward_connection.hpp
+    │   ├── socks5
+    │   │   ├── common.cpp
+    │   │   ├── common.h
+    │   │   ├── socks5_proxy_session.hpp
+    │   │   ├── socks5_session.cpp
+    │   │   ├── socks5_session.h
+    │   │   └── socks5_type.h
+    │   ├── transparent_proxy_connection.hpp
+    │   └── websocket
+    │       ├── ws_common.cpp
+    │       ├── ws_common.hpp
+    │       ├── ws_forward_connection.cpp
+    │       ├── ws_forward_connection.hpp
+    │       └── ws_upgrade_session.hpp
+    ├── rpc_client.hpp
+    └── rpc_server.hpp
+
+third-parties/
+├── CMakeLists.txt
+├── ChaiScript  脚本支持
+├── asio-source 异步io
+├── eventpp-source 事件
+├── nlohmann-source json
+├── rttr-source 反射
+├── spdlog-source 日志
+└── wingetopt 命令行解析windows支持
 ```
 
 # 构建
@@ -104,6 +264,7 @@ fundamental kits for develper
 ## 构建系统要求
 ```
 ubuntu 22.04及以上
+windows msvc 2022及以上+(vcpkg)
 cmake 3.22及以上
 g++9及以上
 c++17
