@@ -245,6 +245,8 @@ int main(int argc, char* argv[]) {
             FERR("connect failed for {}", e.what());
             return -1;
         }
+        network::io_context_pool::Instance().notify_sys_signal.Connect(
+            [&, client_handler](Fundamental::error_code, int) { client_handler->destroy(); });
         std::size_t data_size             = (mtu_size - kRudpProtocalHeadSize) * group_size;
         std::atomic<std::size_t> recv_cnt = 0;
         auto send_task_token              = Fundamental::ThreadPool::DefaultPool().Enqueue([&]() {
