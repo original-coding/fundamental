@@ -43,15 +43,14 @@ std::shared_ptr<const ProxyHost> ProxyManager::GetWsProxyRoute(const std::string
 
     // try search match_prefixs
     for (const auto& match_str : match_prefixs) {
-        if (api_route.length() > match_str.length() &&
-            api_route.compare(0, match_str.length(), match_str.data(), match_str.length()) == 0) {
-            auto iter = ws_proxy_routes.find(api_route.substr(match_str.length()));
-            if (iter != ws_proxy_routes.end()) {
-                FASSERT(iter->second, "route entry memory init error,check your code");
-                iter->second->update();
-                iter->second->access_host();
-                return iter->second;
-            }
+        auto pos = api_route.rfind(match_str);
+        if (pos == std::string::npos) continue;
+        auto iter = ws_proxy_routes.find(api_route.substr(pos + match_str.length()));
+        if (iter != ws_proxy_routes.end()) {
+            FASSERT(iter->second, "route entry memory init error,check your code");
+            iter->second->update();
+            iter->second->access_host();
+            return iter->second;
         }
     }
     return {};
