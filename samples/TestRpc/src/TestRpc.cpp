@@ -23,12 +23,12 @@ using namespace network;
 using namespace network::rpc_service;
 static Fundamental::ThreadPool& s_test_pool = Fundamental::ThreadPool::Instance<101>();
 
-decltype(auto) gen_pipe_proxy() {
+decltype(auto) gen_pipe_proxy(const std::string& path = "/ws_proxy") {
     forward::forward_request_context forward_request;
     forward_request.dst_host    = "127.0.0.1";
     auto ws_dst_port            = ::getenv("ws_dst_port");
     forward_request.dst_service = ws_dst_port ? ws_dst_port : "9000";
-    forward_request.route_path  = "/ws_proxy";
+    forward_request.route_path  = path;
     forward_request.ssl_option  = forward::forward_required_option;
     return proxy::pipe_connection_upgrade::make_shared(forward_request);
 }
@@ -1202,7 +1202,7 @@ TEST(rpc_test, test_void_stream) {
 }
 TEST(rpc_test, test_proxy_list) {
     auto client = network::make_guard<rpc_client>("127.0.0.1", "9000");
-     // add server test
+    // add server test
     client->append_proxy(gen_pipe_add_server_proxy("/ws_proxy_dynamic"));
     client->append_proxy(gen_pipe_proxy());
     auto ws_upgrade = proxy::ws_upgrade_imp::make_shared("/ws_proxy_dynamic", "127.0.0.1");
@@ -1226,6 +1226,31 @@ TEST(rpc_test, test_proxy_list) {
     EXPECT_EQ(ret, str);
 }
 #endif
+
+TEST(rpc_test, test_proxy_prefix_path) {
+    {
+        auto client = network::make_guard<rpc_client>("127.0.0.1", "9000");
+        client->append_proxy(gen_pipe_proxy("/nginx/ws_proxy"));
+        bool r = client->connect();
+        EXPECT_TRUE(r);
+
+        EXPECT_NO_THROW((client->call<100, std::string>("echo", "test")));
+    }
+    {
+        auto client = network::make_guard<rpc_client>("127.0.0.1", "9000");
+        client->append_proxy(gen_pipe_proxy("/nginx/test_remove/ws_proxy"));
+        bool r = client->connect();
+        EXPECT_TRUE(r);
+        EXPECT_NO_THROW((client->call<100, std::string>("echo", "test")));
+    }
+    {//test invalid path
+        auto client = network::make_guard<rpc_client>("127.0.0.1", "9000");
+        client->append_proxy(gen_pipe_proxy("/nginx/test_remove///ws_proxy"));
+        bool r = client->connect();
+        EXPECT_TRUE(r);
+        EXPECT_ANY_THROW((client->call<100, std::string>("echo", "test")));
+    }
+}
 
 int main(int argc, char** argv) {
     int mode = 0;
