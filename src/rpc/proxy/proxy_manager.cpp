@@ -31,14 +31,44 @@ std::shared_ptr<const ProxyHost> ProxyManager::GetWsProxyRoute(const std::string
 
     std::scoped_lock<std::mutex> locker(dataMutex);
     Fundamental::ScopeGuard clear_cache([this]() { remove_invalid_cache_route(); });
-    auto iter = ws_proxy_routes.find(api_route);
-    if (iter != ws_proxy_routes.end()) {
-        FASSERT(iter->second, "route entry memory init error,check your code");
-        iter->second->update();
-        iter->second->access_host();
-        return iter->second;
+    {
+        auto iter = ws_proxy_routes.find(api_route);
+        if (iter != ws_proxy_routes.end()) {
+            FASSERT(iter->second, "route entry memory init error,check your code");
+            iter->second->update();
+            iter->second->access_host();
+            return iter->second;
+        }
+    }
+
+    // try search match_prefixs
+    for (const auto& match_str : match_prefixs) {
+        if (api_route.length() > match_str.length() &&
+            api_route.compare(0, match_str.length(), match_str.data(), match_str.length()) == 0) {
+            auto iter = ws_proxy_routes.find(api_route.substr(match_str.length()));
+            if (iter != ws_proxy_routes.end()) {
+                FASSERT(iter->second, "route entry memory init error,check your code");
+                iter->second->update();
+                iter->second->access_host();
+                return iter->second;
+            }
+        }
     }
     return {};
+}
+
+void ProxyManager::AddMatchPrefixPath(std::string prefix) {
+    while (!prefix.empty()) {
+        if (*prefix.rbegin() == '/') {
+            prefix.resize(prefix.size() - 1);
+            continue;
+        } else {
+            break;
+        }
+    }
+    if (prefix.empty()) return;
+    std::scoped_lock<std::mutex> locker(dataMutex);
+    match_prefixs.insert(prefix);
 }
 
 void ProxyManager::remove_invalid_cache_route() {
