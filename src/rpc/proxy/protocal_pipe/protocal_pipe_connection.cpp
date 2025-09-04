@@ -81,22 +81,24 @@ void protocal_pipe_connection::start_pipe_proxy_handler() {
             FDEBUG("enc response failed");
             return;
         }
-        auto response_data = std::make_shared<std::string>(enc_ret);
-        forward_async_write_buffers(asio::const_buffer { response_data->data(), response_data->size() },
-                                    [this, self = shared_from_this(), response_data,
-                                     need_more_phase = response_context.code == response_context.kSuccessCode](
-                                        std::error_code ec, std::size_t bytesRead) {
-                                        if (!reference_.is_valid() || !need_more_phase) {
-                                            return;
-                                        }
-                                        if (need_forward_phase()) {
-                                            StartProtocal();
-                                            return;
-                                        }
-                                        if (need_fallback()) {
-                                            handle_fallback();
-                                        }
-                                    });
+        auto need_more_phase = response_context.code == response_context.kSuccessCode;
+        // The response indicating a successful proxy will not be sent until after the connection is successfully
+        // established.
+        if (!need_forward_phase() || !need_more_phase) {
+            auto response_data = std::make_shared<std::string>(enc_ret);
+            forward_async_write_buffers(asio::const_buffer { response_data->data(), response_data->size() },
+                                        [this, self = shared_from_this(), response_data,
+                                         need_more_phase](std::error_code ec, std::size_t bytesRead) {
+                                            if (!reference_.is_valid() || !need_more_phase || ec) {
+                                                return;
+                                            }
+                                            if (need_fallback()) {
+                                                handle_fallback();
+                                            }
+                                        });
+        } else {
+            StartProtocal();
+        }
     });
 
     do {
@@ -336,8 +338,26 @@ void protocal_pipe_connection::process_ws_proxy() {
 }
 
 void protocal_pipe_connection::do_pipe_proxy() {
-    StartClientRead();
-    rpc_forward_connection::StartForward();
+    forward::forward_response_context response_context;
+    response_context.code = response_context.kSuccessCode;
+    response_context.msg  = "start pipe proxy";
+
+    auto [enc_success, enc_ret] = response_context.encode();
+    if (!enc_success) {
+        FDEBUG("enc response failed");
+        return;
+    }
+    auto response_data = std::make_shared<std::string>(enc_ret);
+    forward_async_write_buffers(
+        asio::const_buffer { response_data->data(), response_data->size() },
+        [this, self = shared_from_this(), response_data](std::error_code ec, std::size_t bytesRead) {
+            if (!reference_.is_valid() || ec) {
+                FWARN("broken pipe connection");
+                return;
+            }
+            StartClientRead();
+            rpc_forward_connection::StartForward();
+        });
 }
 } // namespace proxy
 } // namespace network
