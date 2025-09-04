@@ -1238,14 +1238,14 @@ TEST(rpc_test, test_proxy_prefix_path) {
     }
     {
         auto client = network::make_guard<rpc_client>("127.0.0.1", "9000");
-        client->append_proxy(gen_pipe_proxy("/nginx/test_remove/ws_proxy"));
+        client->append_proxy(gen_pipe_proxy("/nginx/invalid_prefix/nginx/test_remove/ws_proxy"));
         bool r = client->connect();
         EXPECT_TRUE(r);
         EXPECT_NO_THROW((client->call<100, std::string>("echo", "test")));
     }
     {//test invalid path
         auto client = network::make_guard<rpc_client>("127.0.0.1", "9000");
-        client->append_proxy(gen_pipe_proxy("/nginx/test_remove///ws_proxy"));
+        client->append_proxy(gen_pipe_proxy("/nginx/invalid_prefix/nginx/test_remove///ws_proxy"));
         bool r = client->connect();
         EXPECT_TRUE(r);
         EXPECT_ANY_THROW((client->call<100, std::string>("echo", "test")));
