@@ -1,0 +1,13 @@
+*build*/
+
+.DS_Store
+.vscode/
+.vs/
+.idea/
+*.txt.user
+CMakeLists.txt.user*
+*.pyc
+
+/assets/*.key
+/assets/*.crt
+/assets/*.pem

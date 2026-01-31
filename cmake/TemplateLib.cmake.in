@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+
+
+# Only include targets once:
+
+if( NOT TARGET fh::@lib_name@ )
+    include("${CMAKE_CURRENT_LIST_DIR}/@ExportTargets@.cmake")
+endif()
+

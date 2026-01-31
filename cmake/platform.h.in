@@ -1,0 +1,69 @@
+#pragma once
+
+#ifndef __FUNDAMENTAL_PLATFORM__
+#define __FUNDAMENTAL_PLATFORM__
+#if defined(linux) || defined(__linux) || defined(__linux__)
+    #include <endian.h>
+#endif
+
+    #ifdef __cplusplus
+        #include <cstdint>
+namespace Fundamental
+{
+// All currently supported platform types
+enum class TargetPlatformType : std::uint8_t
+{
+    Unknow = 0,
+    Windows,
+    Linux
+};
+
+// Current target platform
+inline constexpr auto kTargetPlatform =
+        #if defined(linux) || defined(__linux) || defined(__linux__)
+    TargetPlatformType::Linux;
+            #define TARGET_PLATFORM_LINUX 1
+        #elif defined(WIN32) || defined(__WIN32__) || defined(_WIN32) || defined(_MSC_VER)
+    TargetPlatformType::Windows;
+            #define TARGET_PLATFORM_WINDOWS 1
+        #else
+    TargetPlatformType::Unknow;
+        #endif
+
+} // namespace Fundamental
+    #endif // end __cplusplus
+
+    #ifdef _WIN32
+        #ifdef F_BUILD_SHARED
+            #ifdef __DLL_EXPORTS_
+                #define F_API __declspec(dllexport)
+            #else
+                #define F_API __declspec(dllimport)
+            #endif
+        #else
+            #define F_API
+        #endif
+    #else
+        #define F_API
+    #endif
+
+    #ifdef _WIN32
+        #ifdef PLUGIN_BUILD_SHARED
+            #ifdef __PLUGIN_DLL_EXPORTS_
+                #define F_PLUGIN_API __declspec(dllexport)
+            #else
+                #define F_PLUGIN_API __declspec(dllimport)
+            #endif
+        #else
+            #define F_PLUGIN_API
+        #endif
+    #else
+        #define F_PLUGIN_API
+    #endif
+
+    #define C_EXPORT                                  extern "C"
+    #define COMBINE_PLUGIN_INIT_FUNCTION(plugin_name) __plugin_name##_init__
+    #define DECALRE_PLUGIN_INIT_FUNCTION(plugin_name)                                                                  \
+        C_EXPORT F_PLUGIN_API void COMBINE_PLUGIN_INIT_FUNCTION(plugin_name)()
+    #define PROCESS_PLUGIN_INIT(plugin_name) COMBINE_PLUGIN_INIT_FUNCTION(plugin_name)()
+#endif

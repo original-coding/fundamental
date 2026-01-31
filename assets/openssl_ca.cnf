@@ -1,0 +1,21 @@
+[ req ]
+default_bits       = 2048
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt             = no
+
+[ req_distinguished_name ]
+C  = CN
+ST = GuangDong
+L  = GuangZhou
+O  = FongWell_CA
+OU = RDD
+CN = FongWell_CA
+
+[ v3_req ]
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical,keyCertSign, cRLSign
+
+
+
+

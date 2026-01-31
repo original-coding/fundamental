@@ -1,0 +1,12 @@
+set(src_root_dir ${CMAKE_CURRENT_SOURCE_DIR})
+get_filename_component(src_root_dir_name ${src_root_dir} NAME)
+
+add_subdirectory(fundamental)
+if(FUNDAMENTAL_BUILD_NETWORK)
+    add_subdirectory(network)
+    add_subdirectory(rpc)
+    add_subdirectory(http)
+endif()
+if(FUNDAMENTAL_ENABLE_DATABASE_SUPPORT)
+    add_subdirectory(database)
+endif()
