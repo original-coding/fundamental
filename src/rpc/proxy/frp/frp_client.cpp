@@ -87,9 +87,8 @@ frp_client_session::~frp_client_session() {
 }
 
 void frp_client_session::process_protocal() {
-    origin_timeout_msec = idle_check_interval_msec;
-    // 2 hour
-    idle_check_interval_msec = 2 * 3600 * 1000;
+    origin_timeout_msec      = idle_check_interval_msec;
+    idle_check_interval_msec = frp_accept_notify_data::kAcceptKeepAliveIntervalMsec * 2;
     RestartTimeoutIdleCheck();
     send_frp_setup();
 }
@@ -183,13 +182,23 @@ void frp_client_session::process_frp_setup_response(std::string commad_data) {
     process_peer_command(frp_command_type::frp_accept_notify_command);
 }
 
-void frp_client_session::process_frp_accept_signal(std::string) {
-    // reset idle check timer
-    idle_check_interval_msec = origin_timeout_msec;
-    RestartTimeoutIdleCheck();
-    try_notify_accept_result(true);
-    // now we should connect to proxy host:port
-    StartProtocal();
+void frp_client_session::process_frp_accept_signal(std::string commad_data) {
+    frp_accept_notify_data notify_data;
+    Fundamental::io::from_json(commad_data, notify_data);
+    switch (notify_data.r) {
+    case frp_accept_notify_data::kKeepAliveFlag: {
+        process_peer_command(frp_command_type::frp_accept_notify_command);
+    } break;
+    case frp_accept_notify_data::kAcceptFlag: {
+        // reset idle check timer
+        idle_check_interval_msec = origin_timeout_msec;
+        RestartTimeoutIdleCheck();
+        try_notify_accept_result(true);
+        // now we should connect to proxy host:port
+        StartProtocal();
+    } break;
+    default: break;
+    }
 }
 
 void frp_client_session::try_notify_accept_result(bool b_success) {

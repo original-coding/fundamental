@@ -12,7 +12,6 @@ class frp_basic_connection : public std::enable_shared_from_this<frp_basic_conne
                              private asio::noncopyable,
                              public proxy::proxy_upstream_interface {
     friend class frp_port_proxy_session;
-    Fundamental::Signal<void(std::string)> notify_data_pending;
 
 public:
     Fundamental::Signal<void(std::shared_ptr<frp_basic_connection>)> notify_connection_ready;
@@ -24,7 +23,8 @@ public:
         return std::make_shared<frp_basic_connection>(std::forward<Args>(args)...);
     }
     frp_basic_connection(::asio::ip::tcp::socket&& socket, verify_port_func verify_func) :
-    socket_(std::move(socket)), executor_(socket_.get_executor()), verify_func_(verify_func) {
+    socket_(std::move(socket)), executor_(socket_.get_executor()), verify_func_(verify_func),
+    keepalive_timer(executor_) {
         enable_tcp_keep_alive(socket_);
     }
     ~frp_basic_connection() {
@@ -58,15 +58,10 @@ public:
 private:
     void start_proxy_session_waiting(std::shared_ptr<frp_port_proxy_session> session);
 
-    void finish_proxy_session_waiting(std::function<void(std::string)> wait_finish_cb) {
-        if (!wait_finish_cb) return;
-        std::scoped_lock<std::mutex> locker(preread_mutex);
-        if (!preread_cache.empty())
-            wait_finish_cb(preread_cache);
-        else {
-            notify_data_pending.Connect(wait_finish_cb);
-        }
+    void finish_proxy_session_waiting() {
+        keepalive_timer.cancel();
     }
+    void restart_keepalive_task();
 
 private:
     void process_peer_command(frp_command_type next_command);
@@ -161,9 +156,7 @@ private:
     std::uint8_t head_buf[4];
     std::string payload;
     std::shared_ptr<frp_port_proxy_session> ref_port_session;
-    std::mutex preread_mutex;
-    char preread_buf[1];
-    std::string preread_cache;
+    ::asio::steady_timer keepalive_timer;
 };
 
 class frp_port_proxy_connection : public rpc_forward_connection {
@@ -174,7 +167,6 @@ public:
     }
     explicit frp_port_proxy_connection(std::shared_ptr<proxy_upstream_interface> ref_connection,
                                        ::asio::ip::tcp::socket&& downstream_socket);
-    void delay_client_read_init(std::string preread_data);
 
 protected:
     void process_protocal() override;

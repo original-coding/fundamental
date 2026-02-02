@@ -42,6 +42,11 @@ struct frp_setup_response_data : frp_command_base {
 };
 
 struct frp_accept_notify_data : frp_command_base {
+    // 30s
+    static constexpr std::size_t kAcceptKeepAliveIntervalMsec = 30 * 1000;
+    static constexpr std::int32_t kKeepAliveFlag              = 1;
+    static constexpr std::int32_t kAcceptFlag                 = 2;
+    std::int32_t r                                            = 0;
     RTTR_ENABLE(frp_command_base)
 };
 
@@ -84,7 +89,8 @@ inline void __register_frp_reflect_type__() {
     {
         using RegisterType = frp_accept_notify_data;
         rttr::registration::class_<RegisterType>("network::proxy::frp_accept_notify_data")
-            .constructor()(rttr::policy::ctor::as_object);
+            .constructor()(rttr::policy::ctor::as_object)
+            .property("r", &RegisterType::r);
     }
 }
 } // namespace proxy
