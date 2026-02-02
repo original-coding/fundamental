@@ -183,6 +183,8 @@ void frp_client_session::process_frp_setup_response(std::string commad_data) {
 }
 
 void frp_client_session::process_frp_accept_signal(std::string commad_data) {
+    // reset idle check timer first
+    RestartTimeoutIdleCheck();
     frp_accept_notify_data notify_data;
     Fundamental::io::from_json(commad_data, notify_data);
     switch (notify_data.r) {
@@ -190,9 +192,7 @@ void frp_client_session::process_frp_accept_signal(std::string commad_data) {
         process_peer_command(frp_command_type::frp_accept_notify_command);
     } break;
     case frp_accept_notify_data::kAcceptFlag: {
-        // reset idle check timer
         idle_check_interval_msec = origin_timeout_msec;
-        RestartTimeoutIdleCheck();
         try_notify_accept_result(true);
         // now we should connect to proxy host:port
         StartProtocal();

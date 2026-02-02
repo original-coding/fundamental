@@ -6,6 +6,23 @@ namespace proxy
 
 void frp_basic_connection::start_proxy_session_waiting(std::shared_ptr<frp_port_proxy_session> session) {
     ref_port_session = session;
+    async_buffers_read({ network_read_buffer_t { preread_buf, 1 } },
+                       [this, self = shared_from_this()](std::error_code ec, std::size_t len) {
+                           if (!reference_.is_valid()) {
+                               return;
+                           }
+                           do {
+                               if (ec) {
+                                   FERR("frp {} error:{}", frp_id, Fundamental::error_code(ec));
+                                   break;
+                               }
+                               std::scoped_lock<std::mutex> locker(preread_mutex);
+                               preread_cache.push_back(preread_buf[0]);
+                               notify_data_pending(preread_cache);
+                               return;
+                           } while (0);
+                           release_obj();
+                       });
     restart_keepalive_task();
 }
 
@@ -150,6 +167,11 @@ rpc_forward_connection(ref_connection) {
     proxy_socket_ = std::move(downstream_socket);
 }
 
+void frp_port_proxy_connection::delay_client_read_init(std::string preread_data) {
+    load_preread_data(std::move(preread_data));
+    StartClientRead();
+}
+
 void frp_port_proxy_connection::process_protocal() {
     frp_accept_notify_data request_data;
     request_data.command = frp_command_type::frp_accept_notify_command;
@@ -164,7 +186,6 @@ void frp_port_proxy_connection::process_protocal() {
                                         release_obj();
                                         return;
                                     }
-                                    StartClientRead();
                                     rpc_forward_connection::StartForward();
                                 });
 }
@@ -215,7 +236,13 @@ void frp_port_proxy_session::try_accept() {
                     auto new_proxy_session = frp_port_proxy_connection::make_shared(
                         front_session,
                         ::asio::ip::tcp::socket(front_session->get_current_executor(), protocal, native_sock));
-                    front_session->finish_proxy_session_waiting();
+                    front_session->finish_proxy_session_waiting(
+                        [raw_ptr = new_proxy_session.get(),
+                         ref     = new_proxy_session->weak_from_this()](std::string preread_data) {
+                            auto strong = ref.lock();
+                            if (!strong) return;
+                            raw_ptr->delay_client_read_init(std::move(preread_data));
+                        });
                     new_proxy_session->start();
                     break;
                 }

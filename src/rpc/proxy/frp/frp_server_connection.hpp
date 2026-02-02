@@ -12,6 +12,7 @@ class frp_basic_connection : public std::enable_shared_from_this<frp_basic_conne
                              private asio::noncopyable,
                              public proxy::proxy_upstream_interface {
     friend class frp_port_proxy_session;
+    Fundamental::Signal<void(std::string)> notify_data_pending;
 
 public:
     Fundamental::Signal<void(std::shared_ptr<frp_basic_connection>)> notify_connection_ready;
@@ -32,6 +33,7 @@ public:
 
     void release_obj() override {
         reference_.release();
+        keepalive_timer.cancel();
         asio::post(executor_, [this, ref = shared_from_this()] { close(); });
     }
 
@@ -58,8 +60,16 @@ public:
 private:
     void start_proxy_session_waiting(std::shared_ptr<frp_port_proxy_session> session);
 
-    void finish_proxy_session_waiting() {
+    void finish_proxy_session_waiting(std::function<void(std::string)> wait_finish_cb) {
         keepalive_timer.cancel();
+
+        if (!wait_finish_cb) return;
+        std::scoped_lock<std::mutex> locker(preread_mutex);
+        if (!preread_cache.empty())
+            wait_finish_cb(preread_cache);
+        else {
+            notify_data_pending.Connect(wait_finish_cb);
+        }
     }
     void restart_keepalive_task();
 
@@ -156,6 +166,9 @@ private:
     std::uint8_t head_buf[4];
     std::string payload;
     std::shared_ptr<frp_port_proxy_session> ref_port_session;
+    std::mutex preread_mutex;
+    char preread_buf[1];
+    std::string preread_cache;
     ::asio::steady_timer keepalive_timer;
 };
 
@@ -167,6 +180,7 @@ public:
     }
     explicit frp_port_proxy_connection(std::shared_ptr<proxy_upstream_interface> ref_connection,
                                        ::asio::ip::tcp::socket&& downstream_socket);
+    void delay_client_read_init(std::string preread_data);
 
 protected:
     void process_protocal() override;
