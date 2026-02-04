@@ -36,7 +36,10 @@ struct ScopeGuard final : NonCopyable {
     }
 
     ~ScopeGuard() {
-        execute();
+        try {
+            execute();
+        } catch (...) {
+        }
     }
 
     ScopeGuard(ScopeGuard&& other) noexcept : f(std::move(other.f)) {

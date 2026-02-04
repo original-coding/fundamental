@@ -5,12 +5,14 @@
 #include "network/network.hpp"
 #include "network/upgrade_interface.hpp"
 
+#include <condition_variable>
 #include <deque>
 #include <functional>
 #include <future>
 #include <iostream>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <thread>
@@ -103,6 +105,15 @@ struct result_context {
 
     T get() {
         return future.get();
+    }
+
+    T timeout_get(std::size_t timeout_msec = 5000) {
+        auto status = wait_for(std::chrono::milliseconds(timeout_msec));
+        if (status != std::future_status::ready) {
+            throw std::runtime_error(Fundamental::StringFormat("get future failed status:{} for timeout:{} msec",
+                                                               static_cast<std::int32_t>(status), timeout_msec));
+        }
+        return get();
     }
 
     template <typename ResponseType>
@@ -537,6 +548,109 @@ public:
         }
 
         return post_future_call(request_type::rpc_subscribe, key);
+    }
+
+    Fundamental::error_code wait_sync_message(std::string key,
+                                              std::string& out_data,
+                                              std::size_t timeout_msec = 30000) {
+        if (timeout_msec < 200) timeout_msec = 200;
+        Fundamental::error_code ec;
+        const std::string sync_request_key  = Fundamental::StringFormat("{}_request", key);
+        const std::string sync_response_key = Fundamental::StringFormat("{}_response", key);
+        try {
+            std::promise<void> result_promise;
+            std::atomic_bool has_set_value = false;
+            do {
+                subscribe(sync_request_key, [&](string_view data) {
+                    bool expected_value = false;
+                    if (!has_set_value.compare_exchange_strong(expected_value, true)) return;
+                    Fundamental::ScopeGuard set_g([&]() { result_promise.set_value(); });
+                    msgpack_codec codec;
+                    try {
+                        out_data = codec.unpack<std::string>(data.data(), data.size());
+                    } catch (const std::exception& e) {
+                        ec = Fundamental::error_code::make_basic_error(
+                            1, Fundamental::StringFormat("unpack message:{} throw [{}]", key, e.what()));
+                    } catch (...) {
+                        ec = Fundamental::error_code::make_basic_error(
+                            1, Fundamental::StringFormat("unpack message:{} throw", key));
+                    }
+                }).timeout_get(timeout_msec);
+                Fundamental::ScopeGuard g([&]() { unsubscribe(sync_request_key).timeout_get(timeout_msec); });
+                auto result_f    = result_promise.get_future();
+                auto wait_status = result_f.wait_for(std::chrono::milliseconds(timeout_msec));
+                if (wait_status != std::future_status::ready) {
+                    ec = Fundamental::error_code::make_basic_error(
+                        1, Fundamental::StringFormat("wait message:{} timeout {} msec", key, timeout_msec));
+                    break;
+                }
+                result_f.get();
+                if (ec) break;
+                publish(sync_response_key, key).timeout_get(timeout_msec);
+            } while (0);
+
+        } catch (const std::exception& e) {
+            ec = Fundamental::error_code::make_basic_error(
+                1, Fundamental::StringFormat("wait message:{} throw [{}]", key, e.what()));
+        } catch (...) {
+            ec = Fundamental::error_code::make_basic_error(1, Fundamental::StringFormat("wait message:{} throw", key));
+        }
+        return ec;
+    }
+
+    Fundamental::error_code send_sync_message(std::string key,
+                                              std::string in_data,
+                                              std::size_t sync_confirm_cnt   = 1,
+                                              std::size_t send_interval_msec = 2000,
+                                              std::size_t max_send_cnt       = 15) {
+        if (send_interval_msec < 200) send_interval_msec = 200;
+        Fundamental::error_code ec;
+        const std::string sync_request_key  = Fundamental::StringFormat("{}_request", key);
+        const std::string sync_response_key = Fundamental::StringFormat("{}_response", key);
+        try {
+            std::mutex status_update_mutex;
+            std::condition_variable status_update_cv;
+            std::atomic<std::size_t> recv_cnts = 0;
+            do {
+                subscribe(sync_response_key, [&](string_view data) {
+                    msgpack_codec codec;
+                    try {
+                        auto pack_data = codec.unpack<std::string>(data.data(), data.size());
+                        if (pack_data == key) {
+                            recv_cnts.fetch_add(1);
+                            std::scoped_lock<std::mutex> locker(status_update_mutex);
+                            status_update_cv.notify_one();
+                        }
+                    } catch (...) {
+                    }
+                }).timeout_get(send_interval_msec);
+                Fundamental::ScopeGuard g([&]() { unsubscribe(sync_response_key).timeout_get(send_interval_msec); });
+                publish(sync_request_key, in_data).timeout_get(send_interval_msec);
+                std::unique_lock<std::mutex> cv_locker(status_update_mutex);
+                std::size_t current_send_cnt = 0;
+                while (true) {
+                    auto wait_finished =
+                        status_update_cv.wait_for(cv_locker, std::chrono::milliseconds(send_interval_msec),
+                                                  [&]() { return recv_cnts.load() >= sync_confirm_cnt; });
+                    if (wait_finished) break;
+                    ++current_send_cnt;
+                    if (current_send_cnt >= max_send_cnt) {
+                        ec = Fundamental::error_code::make_basic_error(
+                            1, Fundamental::StringFormat("wait message:{} interval {} msec cnt:{}", key,
+                                                         send_interval_msec, current_send_cnt));
+                        break;
+                    }
+                    publish(sync_request_key, in_data).timeout_get(send_interval_msec);
+                }
+            } while (0);
+
+        } catch (const std::exception& e) {
+            ec = Fundamental::error_code::make_basic_error(
+                1, Fundamental::StringFormat("sync message:{} throw [{}]", key, e.what()));
+        } catch (...) {
+            ec = Fundamental::error_code::make_basic_error(1, Fundamental::StringFormat("sync message:{} throw", key));
+        }
+        return ec;
     }
 
     template <typename... Args>

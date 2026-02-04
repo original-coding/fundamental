@@ -393,7 +393,7 @@ TEST(rpc_test, test_download) {
         return;
     }
 
-    auto f       = client->async_call("download", "test");
+    auto f = client->async_call("download", "test");
     f.guard_post_request();
     auto content = f.get().as<std::string>();
     EXPECT_TRUE(s_file_data.size() == content.size() &&
@@ -1482,7 +1482,7 @@ TEST(rpc_test, test_speed_limit) {
 
 TEST(rpc_test, test_port_proxy) {
     std::string buffer1(1024, 'c');
-    {//test ws port proxy with ssl
+    { // test ws port proxy with ssl
         rpc_client_forward_config forward_config;
         forward_config.ssl_config.ca_certificate_path = "ca_root.crt";
         forward_config.ssl_config.private_key_path    = "local.key";
@@ -1506,7 +1506,7 @@ TEST(rpc_test, test_port_proxy) {
         FINFO("result v:{}", ec.message());
         EXPECT_TRUE(ec.value() != 0);
     }
-    {//test ws port proxy with none ssl
+    { // test ws port proxy with none ssl
         rpc_client_forward_config forward_config;
         forward_config.ssl_config.disable_ssl = true;
         auto server                           = proxy::ws_port_pipe_server::make_shared(9001);
@@ -1524,17 +1524,17 @@ TEST(rpc_test, test_port_proxy) {
         server->stop();
         stream->WriteDone();
         auto ec = stream->Finish(0);
-        FINFO("result v:{}",ec.message());
+        FINFO("result v:{}", ec.message());
         EXPECT_TRUE(ec.value() != 0);
     }
-        {//test pipe port proxy with ssl
+    { // test pipe port proxy with ssl
         rpc_client_forward_config forward_config;
         forward_config.ssl_config.ca_certificate_path = "ca_root.crt";
         forward_config.ssl_config.private_key_path    = "local.key";
         forward_config.ssl_config.certificate_path    = "local.crt";
         forward_config.ssl_config.disable_ssl         = false;
         auto server                                   = proxy::ws_port_pipe_server::make_shared(9001);
-        server->set_forward_config(forward_config, "127.0.0.1", "9000", "/ws_proxy","127.0.0.1", "9000");
+        server->set_forward_config(forward_config, "127.0.0.1", "9000", "/ws_proxy", "127.0.0.1", "9000");
         server->start();
         auto client             = network::make_guard<rpc_client>();
         [[maybe_unused]] bool r = client->connect("127.0.0.1", "9001");
@@ -1551,11 +1551,11 @@ TEST(rpc_test, test_port_proxy) {
         FINFO("result v:{}", ec.message());
         EXPECT_TRUE(ec.value() != 0);
     }
-    {//test pipe port proxy with none ssl
+    { // test pipe port proxy with none ssl
         rpc_client_forward_config forward_config;
         forward_config.ssl_config.disable_ssl = true;
         auto server                           = proxy::ws_port_pipe_server::make_shared(9001);
-        server->set_forward_config(forward_config, "127.0.0.1", "9000", "/ws_proxy","127.0.0.1", "9000");
+        server->set_forward_config(forward_config, "127.0.0.1", "9000", "/ws_proxy", "127.0.0.1", "9000");
         server->start();
         auto client             = network::make_guard<rpc_client>();
         [[maybe_unused]] bool r = client->connect("127.0.0.1", "9001");
@@ -1569,12 +1569,44 @@ TEST(rpc_test, test_port_proxy) {
         server->stop();
         stream->WriteDone();
         auto ec = stream->Finish(0);
-        FINFO("result v:{}",ec.message());
+        FINFO("result v:{}", ec.message());
         EXPECT_TRUE(ec.value() != 0);
     }
 }
-#endif
 
+TEST(rpc_test, test_sync_message) {
+    std::size_t test_cnt = 5;
+    std::vector<std::thread> test_threads;
+    std::string sync_data = Fundamental::StringFormat("test sync {}", test_cnt);
+    std::string test_key  = "sync_data_key";
+    for (std::size_t index = 0; index < test_cnt; ++index) {
+        test_threads.emplace_back(std::thread([index = index, test_key, sync_data]() {
+            auto client = network::make_guard<rpc_client>();
+            client->enable_timeout_check();
+            bool r = client->connect("127.0.0.1", "9000");
+            if (!r) {
+                return;
+            }
+            std::string sync_recv_data;
+            client->wait_sync_message(test_key, sync_recv_data, 1000);
+            EXPECT_EQ(sync_recv_data, sync_data);
+        }));
+    }
+    Fundamental::ScopeGuard g([&]() {
+        for (auto& th : test_threads)
+            th.join();
+    });
+    auto client = network::make_guard<rpc_client>();
+    client->enable_timeout_check();
+    bool r = client->connect("127.0.0.1", "9000");
+    if (!r) {
+        return;
+    }
+    auto ec = client->send_sync_message(test_key, sync_data, test_cnt, 1000, 20);
+    FERR("{}", ec);
+    EXPECT_TRUE(!ec);
+}
+#endif
 
 int main(int argc, char** argv) {
     int mode = 0;
