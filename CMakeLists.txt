@@ -54,7 +54,9 @@ if(FUNDAMENTAL_IMPORT_SRC)
     if(BUILD_TESTING)
         add_subdirectory(samples)
     endif()
-    add_subdirectory(applications)
+    if(FUNDAMENTAL_BUILD_APPLICATIONS)
+        add_subdirectory(applications)
+    endif()
 endif()
 
 
