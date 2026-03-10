@@ -95,12 +95,11 @@ function(config_fundamnetal_lib_properties lib_name)
 
 
     # Config link dependencies
-    target_link_libraries(${lib_name}
-     PUBLIC
+    target_link_libraries(${lib_name} PUBLIC
         ${extra_libs}
         spdlog::spdlog
         nlohmann::json
-        
+        BuildSettings
         ZLIB::ZLIB
         BLAKE3::blake3
     )
@@ -130,7 +129,7 @@ if(F_BUILD_STATIC)
     config_fundamnetal_lib_properties(${lib_name}${STATIC_LIB_SUFFIX})
     add_library(${GLOB_NAMESPACE}${lib_name}${STATIC_LIB_SUFFIX} ALIAS ${lib_name}${STATIC_LIB_SUFFIX})
     if(FUNDAMENTAL_ENABLE_INSTALL)
-        native_install_lib_package(${lib_name}${STATIC_LIB_SUFFIX} "${FUNDAMENTAL_VERSION}")
+        native_install_lib_package(${lib_name}${STATIC_LIB_SUFFIX} "${FUNDAMENTAL_VERSION}" BuildSettings)
     endif()
 endif()
 
