@@ -1,5 +1,5 @@
 if(F_BUILD_STATIC)
-  if(BUILD_TESTING)
+  if(FUNDAMENTAL_BUILD_TESTING)
     # add test
     add_unit_test_executable(thread_pool_test thread_pool_test.cpp "" "")
     if(TARGET thread_pool_test)

@@ -13,7 +13,8 @@ option(CLANG_BUILD_WITH_STD_CXX "clang build with libstdc++" ON)
 option(F_ENABLE_COMPILE_OPTIMIZE "enable compile optimize" ON)
 
 set(RTTR_LIB RTTR::Core_Lib CACHE STRING "use rttr static lib")
-set(GLOB_NAMESPACE "fh::" CACHE STRING "generated lib namespace")
+set(GLOB_NAMESPACE_PREFIX "fh" CACHE STRING "generated lib namespace prefix")
+set(GLOB_NAMESPACE "${GLOB_NAMESPACE_PREFIX}::" CACHE STRING "generated lib namespace")
 if(F_BUILD_SHARED)
     set(STATIC_LIB_SUFFIX _s CACHE STRING "static lib suffix")
 endif()
@@ -33,23 +34,23 @@ if(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "amd64|x86_64|x64")
     target_compile_definitions(BuildSettings INTERFACE TARGET_X64_PROCESSOR)
     set(TARGET_X64_PROCESSOR TRUE CACHE BOOL "Target is x86_64 (64-bit) architecture.")
     set(TARGET_X86_FAMILY TRUE CACHE BOOL "Target is x86 family (32 or 64-bit).")
-    
+
 elseif(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "i[0-9]86|i386|i486|i586|i686|x86")
     message(STATUS "Target is x86 (32-bit) architecture.")
     target_compile_definitions(BuildSettings INTERFACE TARGET_X86_PROCESSOR)
     set(TARGET_X86_PROCESSOR TRUE CACHE BOOL "Target is x86 (32-bit) architecture.")
     set(TARGET_X86_FAMILY TRUE CACHE BOOL "Target is x86 family (32 or 64-bit).")
-    
+
 elseif(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "(aarch64|arm64)")
     message(STATUS "Target is ARM 64 architecture.")
     target_compile_definitions(BuildSettings INTERFACE TARGET_ARM64_PROCESSOR)
     set(TARGET_ARM64_PROCESSOR TRUE CACHE BOOL "Target is ARM 64 architecture.")
-    
+
 elseif(CMAKE_SYSTEM_PROCESSOR_LOWER MATCHES "arm")
     message(STATUS "Target is ARM (32-bit) architecture.")
     target_compile_definitions(BuildSettings INTERFACE TARGET_ARM32_PROCESSOR)
     set(TARGET_ARM32_PROCESSOR TRUE CACHE BOOL "Target is ARM (32-bit) architecture.")
-    
+
 else()
     message(WARNING "Unknown target processor: ${CMAKE_SYSTEM_PROCESSOR}")
 endif()

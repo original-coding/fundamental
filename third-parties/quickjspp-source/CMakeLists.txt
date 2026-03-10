@@ -11,5 +11,8 @@ add_subdirectory(quickjspp/quickjs)
 add_library(quickjspp INTERFACE)
 target_link_libraries(quickjspp INTERFACE quickjs ${CMAKE_REQUIRED_LIBRARIES})
 target_compile_features(quickjspp INTERFACE cxx_std_17)
-target_include_directories(quickjspp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/quickjspp)
+target_include_directories(quickjspp INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/quickjspp>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 

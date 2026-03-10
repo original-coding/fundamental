@@ -1,4 +1,6 @@
 #!/bin/bash
-#Release Debug 
-cmake  -DCMAKE_BUILD_TYPE:STRING="RelWithDebInfo" $@  -S . -B ./build-linux 
+#Release Debug
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+export CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-${SCRIPT_DIR}/sysroot}" 
+cmake  -DCMAKE_BUILD_TYPE:STRING="RelWithDebInfo" -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH} -DCMAKE_INSTALL_PREFIX=${CMAKE_PREFIX_PATH} $@  -S . -B ./build-linux 
 

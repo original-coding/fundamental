@@ -1,8 +1,6 @@
 # Set lib_name automatically to its folder name
 get_filename_component(lib_name ${CMAKE_CURRENT_LIST_DIR} NAME)
 set(current_test_lib_name ${lib_name})
-
-add_subdirectory(algorithm/blake3)
 file(GLOB lib_source
     *.h
     *.cpp
@@ -72,7 +70,7 @@ if(FUNDAMENTAL_BUILD_EVENTS)
         data_storage/*.hpp
     )
     list(APPEND lib_source ${events_source})
-    list(APPEND extra_libs eventpp)
+    list(APPEND extra_libs eventpp::eventpp)
 endif()
 
 if(TARGET_PLATFORM_WINDOWS)
@@ -86,35 +84,39 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lib_source})
 
 filter_test_source_files(lib_source)
 
-add_library(${lib_name}_property INTERFACE)
-
-
-target_include_directories(${lib_name}_property INTERFACE
-    ${src_root_dir}
-)
-
 find_package(ZLIB REQUIRED)
 
-# Config link dependencies
-target_link_libraries(${lib_name}_property INTERFACE
-    ${extra_libs}
-    spdlog
-    nlohmann::json
-    BuildSettings
-    ZLIB::ZLIB
-    BLAKE3::blake3
-)
-
-if(FUNDAMENTAL_LOG_PRINT_FILE_NAME)
-    target_compile_definitions(${lib_name}_property
-        INTERFACE
-        __LOG_PRINT_FILE_NAME__=1
+function(config_fundamnetal_lib_properties lib_name)
+    target_include_directories(${lib_name} PUBLIC
+        $<BUILD_INTERFACE:${src_root_dir}>
+        $<INSTALL_INTERFACE:${fundamental_install_prefix}>
     )
-endif()
 
-target_compile_options(${lib_name}_property INTERFACE
-    ${extra_compile_options}
-)
+
+
+    # Config link dependencies
+    target_link_libraries(${lib_name}
+     PUBLIC
+        ${extra_libs}
+        spdlog::spdlog
+        nlohmann::json
+        
+        ZLIB::ZLIB
+        BLAKE3::blake3
+    )
+
+    if(FUNDAMENTAL_LOG_PRINT_FILE_NAME)
+        target_compile_definitions(${lib_name}
+            PUBLIC
+            __LOG_PRINT_FILE_NAME__=1
+        )
+    endif()
+
+    target_compile_options(${lib_name} PUBLIC
+        ${extra_compile_options}
+    )
+endfunction()
+
 
 if(F_BUILD_STATIC)
     # Create the static library
@@ -125,12 +127,11 @@ if(F_BUILD_STATIC)
 
     config_enable_jemalloc_memory_profiling(${lib_name}${STATIC_LIB_SUFFIX})
     config_disable_rtti(${lib_name}${STATIC_LIB_SUFFIX})
-    # Config link dependencies
-    target_link_libraries(${lib_name}${STATIC_LIB_SUFFIX}
-        PUBLIC
-        ${lib_name}_property
-    )
+    config_fundamnetal_lib_properties(${lib_name}${STATIC_LIB_SUFFIX})
     add_library(${GLOB_NAMESPACE}${lib_name}${STATIC_LIB_SUFFIX} ALIAS ${lib_name}${STATIC_LIB_SUFFIX})
+    if(FUNDAMENTAL_ENABLE_INSTALL)
+        native_install_lib_package(${lib_name}${STATIC_LIB_SUFFIX} "${FUNDAMENTAL_VERSION}")
+    endif()
 endif()
 
 if(F_BUILD_SHARED)
@@ -143,17 +144,17 @@ if(F_BUILD_SHARED)
     config_disable_rtti(${lib_name})
     config_enable_sanitize_address_check(${lib_name})
     # Config link dependencies
-    target_link_libraries(${lib_name}
-        PUBLIC
-        ${lib_name}_property
-    )
+    config_fundamnetal_lib_properties(${lib_name})
 
     add_library(${GLOB_NAMESPACE}${lib_name} ALIAS ${lib_name})
+    if(FUNDAMENTAL_ENABLE_INSTALL)
+        native_install_lib_package(${lib_name} "${FUNDAMENTAL_VERSION}" BuildSettings)
+    endif()
 endif()
 
 
 if(F_BUILD_STATIC)
-    if(BUILD_TESTING)
+    if(FUNDAMENTAL_BUILD_TESTING)
         # add test
         add_unit_test_executable(base64_utils_test basic/base64_utils_test.cpp "" "")
         if(TARGET base64_utils_test)
@@ -171,6 +172,17 @@ if(F_BUILD_STATIC)
             )
         endif()
     endif()
+endif()
+
+if(FUNDAMENTAL_ENABLE_INSTALL)
+    # Install the headers
+    install(
+        DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
+        COMPONENT "${lib_name}_install"
+        DESTINATION ${fundamental_install_prefix}
+        FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "*.ipp" PATTERN "*.hh"
+        PATTERN "blake3" EXCLUDE
+    )
 endif()
 add_subdirectory(algorithm)
 add_subdirectory(io)

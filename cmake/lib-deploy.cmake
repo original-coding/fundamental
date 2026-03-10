@@ -22,14 +22,22 @@ endfunction()
 
 
 function(native_install_lib_package lib_name version)
+    # 解析传入的参数：第三个及以后的参数作为interface目标列表
+    set(interface_targets ${ARGN})
     # make cache variables for install destinations
     include(GNUInstallDirs)
     include(CMakePackageConfigHelpers)
     set(ExportTargets "${lib_name}Targets")
     set(ExportConfigVersion "${lib_name}ConfigVersion")
     set(ExportConfig "${lib_name}Config")
+
+    set(install_targets ${lib_name})
+    if(interface_targets)
+        list(APPEND install_targets ${interface_targets})
+    endif()
+
     #declare install location
-    install(TARGETS ${lib_name} EXPORT ${ExportTargets}
+    install(TARGETS ${install_targets} EXPORT ${ExportTargets}
         RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}/${lib_name}/$<CONFIG>"
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/${lib_name}/$<CONFIG>"
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}/${lib_name}/$<CONFIG>"
@@ -59,11 +67,62 @@ function(native_install_lib_package lib_name version)
         COMPONENT "${lib_name}"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${lib_name}
     )
+
+
+
     install(TARGETS ${lib_name}
         COMPONENT "${lib_name}"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/${lib_name}/$<CONFIG>
     )
 endfunction()
+
+function(native_install_external_lib_package lib_name version namespace)
+    if(NOT "${namespace}" STREQUAL "")
+        set(namespace "${namespace}::")
+    endif()
+    # make cache variables for install destinations
+    include(GNUInstallDirs)
+    include(CMakePackageConfigHelpers)
+    set(ExportTargets "${lib_name}Targets")
+    set(ExportConfigVersion "${lib_name}ConfigVersion")
+    set(ExportConfig "${lib_name}Config")
+    #declare install location
+    install(TARGETS ${lib_name} EXPORT ${ExportTargets}
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}/${lib_name}/$<CONFIG>"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/${lib_name}/$<CONFIG>"
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}/${lib_name}/$<CONFIG>"
+    )
+    write_basic_package_version_file(
+        ${ExportConfigVersion}.cmake
+        VERSION ${version}
+        COMPATIBILITY AnyNewerVersion
+    )
+    #if you need install a lib with multi configurations
+    # you should config a lib with muliti configurations
+    export(EXPORT ${ExportTargets}
+        FILE "${CMAKE_CURRENT_BINARY_DIR}/${ExportTargets}.cmake"
+        NAMESPACE "${namespace}"
+    )
+    configure_file(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/TemplateLibWithNs.cmake.in ${ExportConfig}.cmake @ONLY)
+    install(EXPORT ${ExportTargets}
+        FILE ${ExportTargets}.cmake
+        NAMESPACE "${namespace}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${lib_name}
+        COMPONENT "${lib_name}"
+    )
+
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/${ExportConfig}.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/${ExportConfigVersion}.cmake"
+        COMPONENT "${lib_name}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${lib_name}
+    )
+    install(TARGETS ${lib_name}
+        COMPONENT "${lib_name}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/${lib_name}/$<CONFIG>
+    )
+endfunction()
+
 
 function(native_copy_extra_dependencies target_name lib_name)
     add_custom_command(TARGET ${target_name}

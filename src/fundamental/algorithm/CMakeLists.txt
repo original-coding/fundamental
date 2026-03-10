@@ -1,5 +1,5 @@
 if(F_BUILD_STATIC)
-  if(BUILD_TESTING)
+  if(FUNDAMENTAL_BUILD_TESTING)
     # add test
     add_unit_test_executable(blake3_hasher_utils_test blake3_hasher_utils_test.cpp "" "")
     if(TARGET blake3_hasher_utils_test)

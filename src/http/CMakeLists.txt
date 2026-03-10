@@ -21,14 +21,28 @@ set_target_properties(${lib_name} PROPERTIES
 )
 
 target_include_directories(${lib_name} PUBLIC
-    ${src_root_dir}
+    $<BUILD_INTERFACE:${src_root_dir}>
+    $<INSTALL_INTERFACE:${fundamental_install_prefix}>
 )
 
-
+if(FUNDAMENTAL_ENABLE_INSTALL)
+    native_install_lib_package(${lib_name} "${FUNDAMENTAL_VERSION}" BuildSettings)
+endif()
 # Config link dependencies
-target_link_libraries(${lib_name} PUBLIC
+target_link_libraries(${lib_name}
+    PRIVATE
     BuildSettings
+    PUBLIC
     ${GLOB_NAMESPACE}network
 )
 add_library(${GLOB_NAMESPACE}${lib_name} ALIAS ${lib_name})
 config_disable_rtti(${lib_name})
+if(FUNDAMENTAL_ENABLE_INSTALL)
+    # Install the headers
+    install(
+        DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
+        COMPONENT "${lib_name}_install"
+        DESTINATION ${fundamental_install_prefix}
+        FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "*.ipp" PATTERN "*.hh"
+    )
+endif()

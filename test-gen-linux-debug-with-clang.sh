@@ -1,4 +1,6 @@
 #!/bin/bash
-#Release Debug 
-cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_CLANG_TIDY_CHECK=ON -DCMAKE_BUILD_TYPE:STRING="Debug"  -S . -B ./build-linux-debug-clang 
+#Release Debug
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+export CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-${SCRIPT_DIR}/sysroot}"
+cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_CLANG_TIDY_CHECK=ON -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH} -DCMAKE_INSTALL_PREFIX=${CMAKE_PREFIX_PATH} -DCMAKE_BUILD_TYPE:STRING="Debug"  -S . -B ./build-linux-debug-clang 
 
