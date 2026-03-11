@@ -68,14 +68,16 @@ if(FUNDAMENTAL_BUILD_NETWORK)
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/asio-source>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
-    # Install the headers
-    install(
-        DIRECTORY asio-source/
-        COMPONENT "asio_install"
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-        FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "*.ipp" PATTERN "*.hh"
-    )
-    native_install_external_lib_package(asio "1.32.0" "")
+    if(FUNDAMENTAL_ENABLE_INSTALL)
+        # Install the headers
+        install(
+            DIRECTORY asio-source/
+            COMPONENT "asio_install"
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "*.ipp" PATTERN "*.hh"
+        )
+        native_install_external_lib_package(asio "1.32.0" "")
+    endif()
 endif()
 
 
