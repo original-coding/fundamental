@@ -1,3 +1,7 @@
+if(__git_version_helper__)
+    return()
+endif()
+set(__git_version_helper__ TRUE )
 # Git信息获取函数
 # 参数:
 #   SOURCE_DIR - Git工作目录（默认为${CMAKE_SOURCE_DIR}）
