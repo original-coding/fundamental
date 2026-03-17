@@ -123,7 +123,7 @@ private:
     std::map<std::uint64_t, std::tuple<std::string, std::chrono::steady_clock::time_point>> tracking_events;
 };
 
-events_tracker_handle::~events_tracker_handle() {
+inline events_tracker_handle::~events_tracker_handle() {
     auto strong = tracker_ref_.lock();
     if (strong) {
         strong->untrack_event(event_id_);
