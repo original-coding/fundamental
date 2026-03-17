@@ -28,6 +28,9 @@ public:
         return *this;
     }
     ~events_tracker_handle();
+    auto get_event_id() const {
+        return event_id_;
+    }
 
 private:
     events_tracker_handle(std::weak_ptr<events_tracker> tracker, std::uint64_t event_id) :
@@ -43,8 +46,8 @@ class events_tracker : public std::enable_shared_from_this<events_tracker> {
     friend class events_tracker_handle;
 
 public:
-    using track_start_func_t = std::function<void(const std::string&)>;
-    using track_cost_func_t  = std::function<void(const std::string&, double)>;
+    using track_start_func_t = std::function<void(std::uint64_t, const std::string&)>;
+    using track_cost_func_t  = std::function<void(std::uint64_t, const std::string&, double)>;
 
 public:
     static auto make_tracker(const track_start_func_t& start_func,
@@ -63,7 +66,7 @@ public:
         tracking_events.emplace(using_event_id, std::make_tuple(event_description, std::chrono::steady_clock::now()));
         access_flag_.clear();
         if (start_func_) {
-            start_func_(event_description);
+            start_func_(using_event_id, event_description);
         }
         return events_tracker_handle(weak_from_this(), using_event_id);
     }
@@ -82,7 +85,7 @@ public:
             auto elapsedTime                     = std::chrono::steady_clock::now() - start_timepoint;
             double elapsedTimeSec = std::chrono::duration_cast<std::chrono::duration<double>>(elapsedTime).count();
             if (verbose_func_) {
-                verbose_func_(description, elapsedTimeSec);
+                verbose_func_(event.first, description, elapsedTimeSec);
             }
         }
     }
@@ -103,7 +106,7 @@ private:
         tracking_events.erase(event_id);
         access_flag_.clear();
         if (finish_func_) {
-            finish_func_(notify_description, elapsedTimeSec);
+            finish_func_(event_id, notify_description, elapsedTimeSec);
         }
     }
 

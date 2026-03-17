@@ -11,23 +11,23 @@ TEST(tracker, tracker_basic) {
     std::size_t cnt3        = 0;
     std::string events_name = "test_events";
     auto tracker            = Fundamental::events_tracker::make_tracker(
-        [&](const std::string& name) {
+        [&](std::uint64_t id, const std::string& name) {
             if (name == events_name) {
                 cnt1++;
             }
-            FINFO("start event:{}", name);
+            FINFO("start event[{}]:{}", id, name);
         },
-        [&](const std::string& name, double cost_sec) {
+        [&](std::uint64_t id, const std::string& name, double cost_sec) {
             if (name == events_name) {
                 cnt2++;
             }
-            FINFO("event:{} cost {:.6f} seconds", name, cost_sec);
+            FINFO("event[{}]:{} cost {:.6f} seconds", id, name, cost_sec);
         },
-        [&](const std::string& name, double cost_sec) {
+        [&](std::uint64_t id, const std::string& name, double cost_sec) {
             if (name == events_name) {
                 cnt3++;
             }
-            FINFO("event:{} finally cost {:.6f} seconds", name, cost_sec);
+            FINFO("event[{}]:{} finally cost {:.6f} seconds", id, name, cost_sec);
         });
     {
         auto handle = tracker->track_event(events_name);
@@ -57,16 +57,16 @@ TEST(tracker, auto_manager) {
     std::size_t cnt3 = 0;
 
     auto tracker = Fundamental::events_tracker::make_tracker(
-        [&](const std::string& name) {
+        [&](std::uint64_t id, const std::string& name) {
             ++cnt1;
-            FINFO("start event:{}", name);
+            FINFO("start event[{}]:{}", id, name);
         },
-        [&](const std::string& name, double cost_sec) {
+        [&](std::uint64_t id, const std::string& name, double cost_sec) {
             ++cnt2;
-            FINFO("event:{} cost {:.6f} seconds", name, cost_sec);
+            FINFO("event[{}]:{} cost {:.6f} seconds", id, name, cost_sec);
         },
-        [&](const std::string& name, double cost_sec) {
-            FINFO("event:{} finally cost {:.6f} seconds", name, cost_sec);
+        [&](std::uint64_t id, const std::string& name, double cost_sec) {
+            FINFO("event[{}]:{} finally cost {:.6f} seconds", id, name, cost_sec);
             ++cnt3;
         });
     {
