@@ -5,7 +5,8 @@
 #include "fundamental/delay_queue/delay_queue.h"
 #include <iostream>
 #include <unordered_map>
-namespace Fundamental {
+namespace Fundamental
+{
 
 EventsHandler::EventsHandler() : pEventSystem(new Fundamental::EventSystem), pDelayQueue(new Fundamental::DelayQueue) {
     {
@@ -39,7 +40,6 @@ void EventsHandler::Tick() {
 
     if (pEventSystem->IsIdle()) {
         auto waitTimeMsec = pDelayQueue->GetNextTimeoutMsec();
-        if (waitTimeMsec > 10 || waitTimeMsec <= 0) waitTimeMsec = 10;
         Wait(waitTimeMsec);
     }
 }
@@ -67,11 +67,7 @@ void EventsHandlerNormal::WakeUpImp() {
 
 void EventsHandlerNormal::Wait(std::int64_t timeMsec) {
     std::unique_lock<std::mutex> locker(notifyMutex);
-    if (timeMsec > 0) {
-        cv.wait_for(locker, std::chrono::milliseconds(timeMsec));
-    } else {
-        cv.wait(locker);
-    }
+    cv.wait_for(locker, std::chrono::milliseconds(timeMsec));
 }
 
 } // namespace Fundamental

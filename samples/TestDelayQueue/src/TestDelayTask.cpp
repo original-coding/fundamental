@@ -22,7 +22,9 @@ void WakeUp() {
 static void NativeLoop();
 static void TestApi();
 static void StressTesting(std::size_t eventNum);
+static void TestGlobalInstance();
 int main(int argc, char* argv[]) {
+
     Fundamental::Logger::LoggerInitOptions options;
     options.minimumLevel = Fundamental::LogLevel::debug;
     options.logFormat    = "%^[%L]%H:%M:%S.%e%$[%t] %v ";
@@ -34,8 +36,8 @@ int main(int argc, char* argv[]) {
         std::size_t count  = 0;
         while (count++ < 100000)
             g_delayQueue->HandleEvent();
-        FINFO("call HandleEvent 100000 times with no task costs [", Fundamental::Timer::GetTimeNow() - startTimeMsec,
-              "ms] \n");
+        FINFO("call HandleEvent 100000 times with no task costs [{}ms]",
+              Fundamental::Timer::GetTimeNow() - startTimeMsec);
     }
 
     TestApi();
@@ -43,6 +45,7 @@ int main(int argc, char* argv[]) {
     s_nativeLoopThread->join();
     delete g_delayQueue;
     StressTesting(1000000);
+    TestGlobalInstance();
     return 0;
 }
 
@@ -154,6 +157,12 @@ void StressTesting(std::size_t eventNum) {
         t.join();
     s_nativeLoopThread->join();
     delete g_delayQueue;
+}
+void TestGlobalInstance() {
+    auto& instance = Fundamental::DelayQueue::GlobalInstance();
+    auto h         = instance.AddDelayTask(1, []() { FINFO("global delay event"); }, true);
+    instance.StartDelayTask(h);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
 }
 #else
 int main() {

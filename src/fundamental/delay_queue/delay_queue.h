@@ -122,7 +122,8 @@ public:
     bool IsWorking(HandleType handle);
 
     /*
-     * get net timeout msec
+     * this function returns the default execution interval of 100ms when the internal queue is empty; a return value <=
+     * 0 indicates that there are events that have timed out and need to be dispatched immediately
      */
     std::int64_t GetNextTimeoutMsec() const;
     /*
@@ -141,6 +142,8 @@ public:
     // disable copy
     DelayQueue(const DelayQueue&)            = delete;
     DelayQueue& operator=(const DelayQueue&) = delete;
+    // provide the default timer queue; do not access this object in the constructor/destructor of a static instance.
+    [[__nodiscard__]] static DelayQueue& GlobalInstance();
 
 private:
     Imp* pImp = nullptr;

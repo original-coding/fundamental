@@ -1,8 +1,16 @@
 #include "delay_queue.h"
 
+#include "fundamental/basic/utils.hpp"
+
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <future>
 #include <list>
 #include <map>
+#include <mutex>
 #include <set>
+#include <thread>
 #include <unordered_map>
 
 namespace Fundamental
@@ -159,9 +167,11 @@ struct DelayQueue::Imp {
 
     inline std::int64_t GetNextTimeoutMsec() {
         std::scoped_lock<std::mutex> locker(dataMutex);
+        // given a minimum execution interval of 100ms
         if (processingTasks.empty()) {
-            return static_cast<std::int64_t>(~0);
+            return 100;
         }
+        //
         return processingTasks.begin()->first.first -
                Timer::GetTimeNow<std::chrono::milliseconds, std::chrono::steady_clock>();
     }
@@ -310,6 +320,34 @@ DelayQueue::DelayQueue() : pImp(new Imp) {
 
 DelayQueue::~DelayQueue() {
     delete pImp;
+}
+
+DelayQueue& DelayQueue::GlobalInstance() {
+    static bool loop_flag = true;
+    static DelayQueue instance;
+    static std::once_flag init_flag;
+    static std::atomic_bool sync_flag = false;
+    static std::mutex s_mutex;
+    static std::condition_variable s_cv;
+
+    std::call_once(init_flag, []() {
+        std::atexit([]() {
+            loop_flag = false;
+            std::scoped_lock<std::mutex> locker(s_mutex);
+            s_cv.notify_one();
+        });
+        std::thread([]() {
+            Fundamental::Utils::SetThreadName("global_timeq");
+
+            std::unique_lock<std::mutex> locker(s_mutex);
+            while (loop_flag) {
+                instance.HandleEvent();
+                auto next_timeout_msec = instance.GetNextTimeoutMsec();
+                s_cv.wait_for(locker, std::chrono::milliseconds(next_timeout_msec));
+            }
+        }).detach();
+    });
+    return instance;
 }
 
 } // namespace Fundamental

@@ -175,7 +175,6 @@ int main(int argc, char* argv[]) {
         while (!exit_flag) {
             queue.HandleEvent();
             auto next_timeout = queue.GetNextTimeoutMsec();
-            if (next_timeout < 0) next_timeout = 1;
             std::unique_lock<std::mutex> locker(mutex);
             cv.wait_for(locker, std::chrono::milliseconds(next_timeout), [&]() { return !exit_flag; });
         }

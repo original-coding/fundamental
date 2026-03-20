@@ -107,6 +107,7 @@ namespace Utils
 using fpid_t = std::uint32_t;
 fpid_t GetProcessId();
 void SetThreadName(const std::string& name);
+
 std::string BufferToHex(const void* buffer, std::size_t size, std::size_t group_size = 0, std::int8_t spilt_char = 0);
 template <typename T, typename = std::void_t<typename T::value_type>>
 inline std::string BufferToHex(const T& v, std::size_t group_size = 0, std::int8_t spilt_char = 0) {
