@@ -25,7 +25,7 @@ if(UNIX OR MINGW)
   target_link_libraries(quickjs ${CMAKE_DL_LIBS} m Threads::Threads)
   target_link_libraries(quickjs-dumpleaks ${CMAKE_DL_LIBS} m Threads::Threads)
 endif()
-
+if(FUNDAMENTAL_ENABLE_INSTALL)
 # install
 include(GNUInstallDirs)
 install(TARGETS quickjs
@@ -33,3 +33,4 @@ install(TARGETS quickjs
         ARCHIVE       DESTINATION ${CMAKE_INSTALL_LIBDIR}/quickjs
         LIBRARY       DESTINATION ${CMAKE_INSTALL_LIBDIR}/quickjs
         )
+endif()
