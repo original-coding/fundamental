@@ -28,6 +28,22 @@ public:
         asio::post(executor_, [this, ref = shared_from_this()] { close(); });
     }
 
+    std::string local_endpoint_string() const {
+        std::error_code ec;
+        if (!socket_.is_open()) return "unknown";
+        auto endpoint = socket_.local_endpoint(ec);
+        if (ec) return "unknown";
+        return Fundamental::StringFormat("{}:{}", endpoint.address().to_string(), endpoint.port());
+    }
+
+    std::string remote_endpoint_string() const {
+        std::error_code ec;
+        if (!socket_.is_open()) return "unknown";
+        auto endpoint = socket_.remote_endpoint(ec);
+        if (ec) return "unknown";
+        return Fundamental::StringFormat("{}:{}", endpoint.address().to_string(), endpoint.port());
+    }
+
     void start_async_connect() {
         resolver_.async_resolve(
             host, service,

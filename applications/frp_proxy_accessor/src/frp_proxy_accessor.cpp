@@ -34,26 +34,26 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (arg_parser.HasParam("print-example-config")) {
-        std::cout << dump_frp_config_example_json(make_example_provider_config()) << std::endl;
+        std::cout << dump_frp_config_example_json(make_example_accessor_config()) << std::endl;
         return 0;
     }
 
     auto config_path = arg_parser.GetValue<std::string>("config", "");
     if (config_path.empty()) {
-        FERR("provider requires --config");
+        FERR("accessor requires --config");
         return 1;
     }
 
-    frp_provider_config config;
+    frp_accessor_config config;
     std::string error_message;
     __register_frp_runtime_reflect_type__();
     if (!load_frp_config_file(config_path, config, error_message) || !validate_config(config, error_message)) {
-        FERR("invalid frp provider config:{} err:{}", config_path, error_message);
+        FERR("invalid frp accessor config:{} err:{}", config_path, error_message);
         return 1;
     }
 
     network::init_io_context_pool(config.threads);
-    auto agent = network::make_guard<frp_runtime_provider_agent>(std::move(config));
+    auto agent = network::make_guard<frp_runtime_accessor_agent>(std::move(config));
     agent->start();
     Fundamental::Application::Instance().Loop();
     Fundamental::Application::Instance().Exit();
