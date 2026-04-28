@@ -40,9 +40,6 @@ std::optional<asio::ip::udp::endpoint> resolve_udp_endpoint(const asio::any_io_e
     asio::ip::udp::resolver resolver(executor);
     auto endpoints = resolver.resolve(asio::ip::udp::v4(), host, std::to_string(port), ec);
     if (ec) {
-        endpoints = resolver.resolve(asio::ip::udp::v6(), host, std::to_string(port), ec);
-    }
-    if (ec) {
         return std::nullopt;
     }
     auto it = endpoints.begin();
