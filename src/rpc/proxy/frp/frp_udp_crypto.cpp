@@ -76,6 +76,7 @@ std::vector<std::uint8_t> frp_derive_udp_flow_key(
     }
 
     EVP_PKEY_CTX_free(pctx);
+    FINFO("frp_derive_udp_flow_key flow_id={} direction={} key_size={}", flow_id, is_sender ? "send" : "recv", key.size());
     return key;
 }
 
@@ -151,6 +152,7 @@ std::vector<std::uint8_t> frp_udp_encrypt(
     output.insert(output.end(), tag.begin(), tag.end());
 
     EVP_CIPHER_CTX_free(ctx);
+    FINFO("frp_udp_encrypt plaintext_size={} output_size={}", plaintext.size(), output.size());
     return output;
 }
 
@@ -226,7 +228,7 @@ std::optional<std::vector<std::uint8_t>> frp_udp_decrypt(
 
     plaintext.resize(plaintext_len);
     EVP_CIPHER_CTX_free(ctx);
-
+    FINFO("frp_udp_decrypt ok packet_size={} plaintext_size={}", encrypted_packet.size(), plaintext_len);
     return plaintext;
 }
 

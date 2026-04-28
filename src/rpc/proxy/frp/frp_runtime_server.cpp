@@ -34,6 +34,7 @@ void frp_runtime_public_server::start_udp_servers() {
         if (ec) {
             throw std::invalid_argument(Fundamental::StringFormat("bind udp port:{} failed err:{}", port, ec.message()));
         }
+        FINFO("start_udp_servers bound udp port={}", port);
         udp_servers_.push_back(server);
     }
 }
@@ -68,6 +69,9 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                                 echo.flow_id       = 0;
                                 echo.external_ip   = server->remote_endpoint.address().to_string();
                                 echo.external_port = server->remote_endpoint.port();
+                                FINFO("startup_probe received from {}:{} echoing external={}:{}",
+                                      server->remote_endpoint.address().to_string(), server->remote_endpoint.port(),
+                                      echo.external_ip, echo.external_port);
                                 auto echo_json = Fundamental::io::to_json(echo);
                                 auto resp_key  = frp_derive_udp_flow_key(config_.traffic_secret, 0, false);
                                 auto encrypted_resp = frp_udp_encrypt_string(resp_key, echo_json);
@@ -113,6 +117,9 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                     start_udp_receive(index);
                     return;
                 }
+
+                FINFO("udp_receive decrypted flow probe from {}:{} payload_size={}",
+                      server->remote_endpoint.address().to_string(), server->remote_endpoint.port(), payload.size());
 
                 frp_runtime_command_base command;
                 if (Fundamental::io::from_json(payload, command) && command.command == frp_runtime_p2p_probe_command) {
@@ -544,6 +551,9 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         current->local_port        = data.local_port;
         current->observed_endpoint = remote_endpoint;
         current->ready             = true;
+        FINFO("register_p2p_probe flow_id={} uuid={} local_ip={} local_port={} observed={}:{}",
+              data.flow_id, data.uuid, data.local_ip, data.local_port,
+              remote_endpoint.address().to_string(), remote_endpoint.port());
 
         if (!flow.provider_probe.ready || !flow.accessor_probe.ready) {
             return true;
@@ -552,6 +562,10 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
 
         const bool same_public_ip =
             flow.provider_probe.observed_endpoint.address() == flow.accessor_probe.observed_endpoint.address();
+        FINFO("register_p2p_probe both_ready flow_id={} same_public_ip={} provider_observed={}:{} accessor_observed={}:{}",
+              data.flow_id, same_public_ip,
+              flow.provider_probe.observed_endpoint.address().to_string(), flow.provider_probe.observed_endpoint.port(),
+              flow.accessor_probe.observed_endpoint.address().to_string(), flow.accessor_probe.observed_endpoint.port());
         provider_peer.flow_id      = data.flow_id;
         accessor_peer.flow_id      = data.flow_id;
         provider_peer.use_local_candidate = same_public_ip;
@@ -715,6 +729,7 @@ bool frp_runtime_public_server::bind_data_session(const std::shared_ptr<frp_runt
             auto accessor_data = flow.accessor_data_session.lock();
             if (provider_data && accessor_data) {
                 flow.transport_ready = true;
+                FINFO("bind_data_session transport_ready flow_id={} both sides connected", data.flow_id);
                 auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
                 if (provider_it != providers_by_uuid_.end()) {
                     provider_signal_session = provider_it->second.session.lock();
@@ -1025,6 +1040,8 @@ void frp_runtime_signal_session::handle_initial_phase(const frp_runtime_command_
     case frp_runtime_signal_open_command: {
         mode_ = session_mode::signal;
         server_nonce_ = frp_generate_server_nonce();
+        FINFO("signal_session signal_open received from {}",
+              socket_.remote_endpoint().address().to_string());
         frp_runtime_server_hello_data hello;
         hello.command      = frp_runtime_server_hello_command;
         hello.server_nonce = server_nonce_;
@@ -1038,6 +1055,7 @@ void frp_runtime_signal_session::handle_initial_phase(const frp_runtime_command_
             release_obj();
             return;
         }
+        FINFO("signal_session data_open received flow_id={} uuid={}", request.flow_id, request.uuid);
         handle_data_open_phase(request);
         return;
     }
@@ -1055,6 +1073,7 @@ void frp_runtime_signal_session::handle_server_hello_phase(const frp_runtime_com
         send_auth_failure_and_close("invalid auth_request");
         return;
     }
+    FINFO("signal_session auth_request received nonce={}", server_nonce_);
     frp_runtime_auth_response_data response;
     response.command = frp_runtime_auth_response_command;
     response.ok      = owner_ && owner_->verify_auth_digest(server_nonce_, request.digest);
@@ -1182,6 +1201,7 @@ void frp_runtime_signal_session::handle_data_open_phase(const frp_runtime_data_o
         release_obj();
         return;
     }
+    FINFO("data_open accepted flow_id={} uuid={}", request.flow_id, request.uuid);
     mode_    = session_mode::data;
     flow_id_ = request.flow_id;
     uuid_    = request.uuid;
@@ -1192,7 +1212,7 @@ void frp_runtime_signal_session::handle_join_phase(const frp_runtime_join_reques
     frp_runtime_join_response_data response;
     response.command = frp_runtime_join_response_command;
     std::string error_message;
-    response.ok = owner_ && owner_->bind_signal_identity(shared_from_this(), request, error_message);
+    response.ok      = owner_ && owner_->bind_signal_identity(shared_from_this(), request, error_message);
     response.message = response.ok ? "ok" : error_message;
     if (response.ok) {
         role_         = static_cast<role_type>(request.role);
@@ -1200,6 +1220,9 @@ void frp_runtime_signal_session::handle_join_phase(const frp_runtime_join_reques
         register_key_ = request.register_key;
         enable_p2p_ = request.enable_p2p;
         joined_       = true;
+        FINFO("signal_session join_request role={} uuid={} register_key={} enable_p2p={}",
+              request.role == frp_runtime_provider_role ? "provider" : "accessor",
+              uuid_, register_key_, enable_p2p_);
     }
     send_command(response);
     if (!response.ok) {
@@ -1246,6 +1269,8 @@ void frp_runtime_signal_session::handle_fetch_services_phase() {
 }
 
 void frp_runtime_signal_session::handle_create_flow_phase(const frp_runtime_create_flow_request_data& request) {
+    FINFO("signal_session create_flow_request uuid={} service_name={} transport={}",
+          uuid_, request.service_name, request.transport == frp_runtime_transport_p2p ? "p2p" : "tcp_relay");
     frp_runtime_create_flow_response_data response;
     if (owner_) {
         response = owner_->create_flow(shared_from_this(), request);

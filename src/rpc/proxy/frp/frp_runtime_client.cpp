@@ -814,6 +814,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("provider recv server_hello nonce={}", hello.server_nonce);
         frp_runtime_auth_request_data request;
         request.command = frp_runtime_auth_request_command;
         request.digest  = frp_hmac_sha256_hex(config_.traffic_secret, hello.server_nonce);
@@ -827,6 +828,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("provider recv auth_response ok uuid={}", uuid_);
         frp_runtime_join_request_data join;
         join.command      = frp_runtime_join_request_command;
         join.role         = frp_runtime_provider_role;
@@ -843,6 +845,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("provider recv join_response ok uuid={}", uuid_);
         frp_runtime_register_services_request_data request;
         request.command = frp_runtime_register_services_request_command;
         request.services.reserve(config_.services.size());
@@ -870,6 +873,10 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("provider recv prepare_flow flow_id={} service_name={} transport={} accessor_uuid={}",
+              request.flow_id, request.service_name,
+              request.transport == frp_runtime_transport_p2p ? "p2p" : "tcp_relay",
+              request.accessor_uuid);
         auto service = find_service(request.service_name);
         if (!service) {
             frp_runtime_flow_failed_data failed;
@@ -920,6 +927,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("provider recv flow_transport_ready flow_id={}", ready.flow_id);
         auto it = flows_.find(ready.flow_id);
         if (it == flows_.end()) return;
         auto flow = it->second;
@@ -1155,8 +1163,7 @@ void frp_runtime_provider_agent::start_flow_endpoint_probe(const std::shared_ptr
     flow->awaiting_endpoint_ready = true;
     flow->endpoint_probe_attempts = 0;
     auto local_port = flow->p2p_socket->local_endpoint(ec).port();
-
-    // Use shared_ptr<function> for self-referential retransmit loop
+    FINFO("provider start_flow_endpoint_probe flow_id={} local_port={}", flow->flow_id, local_port);
     auto fn = std::make_shared<std::function<void()>>();
     *fn = [this, self = shared_from_this(), flow, local_port, fn]() mutable {
         if (!reference_.is_valid() || !channel_ || flow->closed || !flow->awaiting_endpoint_ready) return;
@@ -1185,6 +1192,9 @@ void frp_runtime_provider_agent::start_flow_endpoint_probe(const std::shared_ptr
                                                     config_.public_server_udp_port);
         if (!server_endpoint) return;
         flow->endpoint_probe_attempts++;
+        FINFO("provider flow_endpoint_probe attempt={} flow_id={} server={}:{}",
+              flow->endpoint_probe_attempts, flow->flow_id,
+              config_.public_server_host, config_.public_server_udp_port);
         auto enc_ptr = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted));
         flow->p2p_socket->async_send_to(asio::buffer(*enc_ptr), *server_endpoint,
                                         [enc_ptr](const std::error_code&, std::size_t) {});
@@ -1577,6 +1587,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("accessor recv server_hello nonce={}", hello.server_nonce);
         frp_runtime_auth_request_data request;
         request.command = frp_runtime_auth_request_command;
         request.digest  = frp_hmac_sha256_hex(config_.traffic_secret, hello.server_nonce);
@@ -1590,6 +1601,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("accessor recv auth_response ok uuid={}", uuid_);
         frp_runtime_join_request_data join;
         join.command      = frp_runtime_join_request_command;
         join.role         = frp_runtime_accessor_role;
@@ -1606,6 +1618,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("accessor recv join_response ok uuid={}", uuid_);
         frp_runtime_fetch_services_request_data request;
         request.command = frp_runtime_fetch_services_request_command;
         channel_->send_command(request);
@@ -1618,6 +1631,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
+        FINFO("accessor recv fetch_services_response ok uuid={} services={}", uuid_, response.services.size());
         reconcile_listeners(response.services);
         FINFO("accessor runtime ready uuid={} visible_services={} local_listeners={}", uuid_, response.services.size(),
               listeners_.size());
@@ -1656,6 +1670,8 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         }
         session->flow_id = response.flow_id;
         sessions_by_flow_id_[session->flow_id] = session;
+        FINFO("accessor recv create_flow_response accepted flow_id={} service_name={} awaiting_p2p={}",
+              session->flow_id, session->service_name, session->awaiting_p2p);
         if (session->awaiting_p2p) {
             start_flow_endpoint_probe(session);
             return;
@@ -1863,6 +1879,7 @@ void frp_runtime_accessor_agent::start_flow_endpoint_probe(const std::shared_ptr
     session->awaiting_endpoint_ready = true;
     session->endpoint_probe_attempts = 0;
     auto local_port = session->p2p_socket->local_endpoint(ec).port();
+    FINFO("accessor start_flow_endpoint_probe flow_id={} local_port={}", session->flow_id, local_port);
 
     auto fn = std::make_shared<std::function<void()>>();
     *fn = [this, self = shared_from_this(), session, local_port, fn]() mutable {
@@ -1884,6 +1901,9 @@ void frp_runtime_accessor_agent::start_flow_endpoint_probe(const std::shared_ptr
                                                     config_.public_server_udp_port);
         if (!server_endpoint) return;
         session->endpoint_probe_attempts++;
+        FINFO("accessor flow_endpoint_probe attempt={} flow_id={} server={}:{}",
+              session->endpoint_probe_attempts, session->flow_id,
+              config_.public_server_host, config_.public_server_udp_port);
         auto enc_ptr = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted));
         session->p2p_socket->async_send_to(asio::buffer(*enc_ptr), *server_endpoint,
                                            [enc_ptr](const std::error_code&, std::size_t) {});
