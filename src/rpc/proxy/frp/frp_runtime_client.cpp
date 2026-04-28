@@ -34,12 +34,17 @@ std::optional<asio::ip::udp::endpoint> resolve_udp_endpoint(const asio::any_io_e
     std::error_code ec;
     auto address = asio::ip::make_address(host, ec);
     if (!ec) {
-        return asio::ip::udp::endpoint(address, port);
+        if (address.is_v6()) {
+            FINFO("resolve_udp_endpoint: rejecting IPv6 address {}, falling back to v4 DNS for {}", host, host);
+        } else {
+            return asio::ip::udp::endpoint(address, port);
+        }
     }
 
     asio::ip::udp::resolver resolver(executor);
     auto endpoints = resolver.resolve(asio::ip::udp::v4(), host, std::to_string(port), ec);
     if (ec) {
+        FINFO("resolve_udp_endpoint: v4 DNS resolution failed for {}:{} err={}", host, port, ec.message());
         return std::nullopt;
     }
     auto it = endpoints.begin();
@@ -83,6 +88,8 @@ static std::int32_t frp_runtime_kcp_output(const char* buf, int len, ikcpcb*, vo
 
     // KCP header must be plaintext - send raw KCP packet directly
     auto payload = std::make_shared<std::string>(buf, len);
+    FINFO("frp_runtime_kcp_output len={} to={}:{}", len,
+          context->peer_endpoint->address().to_string(), context->peer_endpoint->port());
     (*context->socket)
         ->async_send_to(asio::buffer(*payload), *context->peer_endpoint, [payload](const std::error_code&, std::size_t) {});
     return 0;
@@ -477,14 +484,17 @@ void run_startup_probe(const asio::any_io_executor& executor,
     std::error_code ec;
     state->socket->open(asio::ip::udp::v4(), ec);
     if (ec) {
+        FINFO("startup_probe socket open failed err={}", ec.message());
         state->on_done(false);
         return;
     }
     state->socket->bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 0), ec);
     if (ec) {
+        FINFO("startup_probe socket bind failed err={}", ec.message());
         state->on_done(false);
         return;
     }
+    FINFO("startup_probe socket bound local_port={}", state->socket->local_endpoint(ec).port());
 
     auto do_probe = std::make_shared<std::function<void()>>();
     auto do_recv  = std::make_shared<std::function<void()>>();
@@ -496,14 +506,18 @@ void run_startup_probe(const asio::any_io_executor& executor,
             [state, do_probe, do_recv](const std::error_code& ec, std::size_t bytes_read) mutable {
                 if (state->done) return;
                 if (!ec && bytes_read > 0) {
+                    FINFO("startup_probe recv bytes={} from={}:{}", bytes_read,
+                          state->recv_endpoint.address().to_string(), state->recv_endpoint.port());
                     std::vector<std::uint8_t> encrypted(state->recv_buf.data(), state->recv_buf.data() + bytes_read);
                     auto plaintext = frp_udp_decrypt(state->recv_key, encrypted);
                     if (plaintext) {
                         std::string payload(plaintext->begin(), plaintext->end());
+                        FINFO("startup_probe decrypted payload_size={} payload={}", plaintext->size(), payload);
                         frp_runtime_flow_endpoint_ready_data echo;
                         if (Fundamental::io::from_json(payload, echo) && echo.flow_id == 0 && !echo.external_ip.empty()) {
                             state->timer.cancel();
                             auto result = Fundamental::StringFormat("{}:{}", echo.external_ip, echo.external_port);
+                            FINFO("startup_probe port_index={} received echo external={}", state->port_index, result);
                             if (state->port_index == 0) {
                                 state->result1 = result;
                             } else {
@@ -523,6 +537,10 @@ void run_startup_probe(const asio::any_io_executor& executor,
                             (*do_probe)();
                             return;
                         }
+                        FINFO("startup_probe recv unexpected payload: flow_id not 0 or parse failed");
+                    } else {
+                        FINFO("startup_probe recv decrypt failed, ignoring packet from={}:{}",
+                              state->recv_endpoint.address().to_string(), state->recv_endpoint.port());
                     }
                 }
                 if (!state->done) (*do_recv)();
@@ -561,6 +579,9 @@ void run_startup_probe(const asio::any_io_executor& executor,
             return;
         }
         state->attempts++;
+        FINFO("startup_probe send attempt={} port_index={} local_port={} server={}:{} probe_size={}",
+              state->attempts, state->port_index, local_port,
+              server_endpoint->address().to_string(), server_endpoint->port(), encrypted.size());
         auto enc_ptr = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted));
         state->socket->async_send_to(asio::buffer(*enc_ptr), *server_endpoint,
                                      [enc_ptr](const std::error_code&, std::size_t) {});
@@ -655,6 +676,7 @@ void frp_runtime_provider_agent::provider_kcp_send(const std::shared_ptr<provide
     std::vector<std::uint8_t> plaintext(data, data + size);
     auto encrypted = frp_udp_encrypt(flow->udp_send_key, plaintext);
     if (encrypted.empty()) return;
+    FINFO("provider kcp_send flow_id={} plaintext_size={} encrypted_size={}", flow->flow_id, size, encrypted.size());
     if (ikcp_send(flow->kcp.get(), reinterpret_cast<const char*>(encrypted.data()), static_cast<int>(encrypted.size())) < 0) return;
     ikcp_update(flow->kcp.get(), frp_runtime_kcp_clock());
 }
@@ -686,7 +708,17 @@ void frp_runtime_provider_agent::start_provider_p2p_read_loop(const std::shared_
         asio::buffer(flow->p2p_read_buf.data(), flow->p2p_read_buf.size()),
         flow->p2p_recv_endpoint,
         [this, self = shared_from_this(), flow](const asio::error_code& ec, std::size_t bytes_read) {
-            if (ec || !reference_.is_valid() || flow->closed || !flow->kcp) return;
+            if (!reference_.is_valid()) return;
+            if (ec) {
+                FINFO("provider p2p recv error flow_id={} err={}", flow->flow_id, ec.message());
+                if (flow->closed) return;
+                start_provider_p2p_read_loop(flow);
+                return;
+            }
+            if (flow->closed || !flow->kcp) return;
+
+            FINFO("provider p2p recv flow_id={} bytes={} from={}:{}", flow->flow_id, bytes_read,
+                  flow->p2p_recv_endpoint.address().to_string(), flow->p2p_recv_endpoint.port());
 
             // 1-byte: keepalive, discard
             if (bytes_read == 1) {
@@ -699,6 +731,8 @@ void frp_runtime_provider_agent::start_provider_p2p_read_loop(const std::shared_
                 if (flow->low_ttl_probe_active && !flow->p2p_success) {
                     std::uint32_t pkt_flow_id = 0;
                     std::memcpy(&pkt_flow_id, flow->p2p_read_buf.data(), 4);
+                    FINFO("provider p2p recv low_ttl probe flow_id={} pkt_flow_id={} ttl={}", flow->flow_id, pkt_flow_id,
+                          static_cast<int>(flow->p2p_read_buf[4]));
                     if (pkt_flow_id == flow->flow_id) {
                         flow->p2p_success = true;
                         flow->low_ttl_probe_active = false;
@@ -721,11 +755,13 @@ void frp_runtime_provider_agent::start_provider_p2p_read_loop(const std::shared_
 
             // < 24 bytes: discard (too small for KCP)
             if (bytes_read < 24) {
+                FINFO("provider p2p recv discarding short packet flow_id={} bytes={}", flow->flow_id, bytes_read);
                 start_provider_p2p_read_loop(flow);
                 return;
             }
 
             // KCP input
+            FINFO("provider p2p recv KCP input flow_id={} bytes={}", flow->flow_id, bytes_read);
             ikcp_input(flow->kcp.get(), flow->p2p_read_buf.data(), static_cast<long>(bytes_read));
             ikcp_update(flow->kcp.get(), frp_runtime_kcp_clock());
             std::array<char, 16 * 1024> recv_buf {};
@@ -736,9 +772,10 @@ void frp_runtime_provider_agent::start_provider_p2p_read_loop(const std::shared_
                 std::vector<std::uint8_t> encrypted(recv_buf.data(), recv_buf.data() + recv_size);
                 auto plaintext = frp_udp_decrypt(flow->udp_recv_key, encrypted);
                 if (!plaintext) {
-                    FWARN("provider flow {} failed to decrypt KCP payload size={}", flow->flow_id, recv_size);
+                    FINFO("provider flow {} failed to decrypt KCP payload size={}", flow->flow_id, recv_size);
                     continue;
                 }
+                FINFO("provider p2p KCP recv decrypted flow_id={} size={}", flow->flow_id, plaintext->size());
                 flow->pending_writes.emplace_back(reinterpret_cast<const char*>(plaintext->data()), plaintext->size());
                 handle_backend_write_queue(flow);
             }
@@ -1189,9 +1226,9 @@ void frp_runtime_provider_agent::start_flow_endpoint_probe(const std::shared_ptr
                                                     config_.public_server_udp_port);
         if (!server_endpoint) return;
         flow->endpoint_probe_attempts++;
-        FINFO("provider flow_endpoint_probe attempt={} flow_id={} server={}:{}",
-              flow->endpoint_probe_attempts, flow->flow_id,
-              config_.public_server_host, config_.public_server_udp_port);
+        FINFO("provider flow_endpoint_probe attempt={} flow_id={} local_port={} server={}:{} probe_size={}",
+              flow->endpoint_probe_attempts, flow->flow_id, local_port,
+              config_.public_server_host, config_.public_server_udp_port, encrypted.size());
         auto enc_ptr = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted));
         flow->p2p_socket->async_send_to(asio::buffer(*enc_ptr), *server_endpoint,
                                         [enc_ptr](const std::error_code&, std::size_t) {});
@@ -1499,6 +1536,7 @@ void frp_runtime_accessor_agent::accessor_kcp_send(const std::shared_ptr<accesso
     std::vector<std::uint8_t> plaintext(data, data + size);
     auto encrypted = frp_udp_encrypt(session->udp_send_key, plaintext);
     if (encrypted.empty()) return;
+    FINFO("accessor kcp_send flow_id={} plaintext_size={} encrypted_size={}", session->flow_id, size, encrypted.size());
     if (ikcp_send(session->kcp.get(), reinterpret_cast<const char*>(encrypted.data()), static_cast<int>(encrypted.size())) < 0) return;
     ikcp_update(session->kcp.get(), frp_runtime_kcp_clock());
 }
@@ -1519,7 +1557,17 @@ void frp_runtime_accessor_agent::start_accessor_p2p_read_loop(const std::shared_
         asio::buffer(session->p2p_read_buf.data(), session->p2p_read_buf.size()),
         session->p2p_recv_endpoint,
         [this, self = shared_from_this(), session](const asio::error_code& ec, std::size_t bytes_read) {
-            if (ec || !reference_.is_valid() || session->closed || !session->kcp) return;
+            if (!reference_.is_valid()) return;
+            if (ec) {
+                FINFO("accessor p2p recv error flow_id={} err={}", session->flow_id, ec.message());
+                if (session->closed) return;
+                start_accessor_p2p_read_loop(session);
+                return;
+            }
+            if (session->closed || !session->kcp) return;
+
+            FINFO("accessor p2p recv flow_id={} bytes={} from={}:{}", session->flow_id, bytes_read,
+                  session->p2p_recv_endpoint.address().to_string(), session->p2p_recv_endpoint.port());
 
             // 1-byte: keepalive, discard
             if (bytes_read == 1) {
@@ -1532,6 +1580,8 @@ void frp_runtime_accessor_agent::start_accessor_p2p_read_loop(const std::shared_
                 if (session->low_ttl_probe_active && !session->p2p_success) {
                     std::uint32_t pkt_flow_id = 0;
                     std::memcpy(&pkt_flow_id, session->p2p_read_buf.data(), 4);
+                    FINFO("accessor p2p recv low_ttl probe flow_id={} pkt_flow_id={} ttl={}", session->flow_id, pkt_flow_id,
+                          static_cast<int>(session->p2p_read_buf[4]));
                     if (pkt_flow_id == session->flow_id) {
                         session->p2p_success = true;
                         session->low_ttl_probe_active = false;
@@ -1550,11 +1600,13 @@ void frp_runtime_accessor_agent::start_accessor_p2p_read_loop(const std::shared_
 
             // < 24 bytes: discard
             if (bytes_read < 24) {
+                FINFO("accessor p2p recv discarding short packet flow_id={} bytes={}", session->flow_id, bytes_read);
                 start_accessor_p2p_read_loop(session);
                 return;
             }
 
             // KCP input
+            FINFO("accessor p2p recv KCP input flow_id={} bytes={}", session->flow_id, bytes_read);
             ikcp_input(session->kcp.get(), session->p2p_read_buf.data(), static_cast<long>(bytes_read));
             ikcp_update(session->kcp.get(), frp_runtime_kcp_clock());
             std::array<char, 16 * 1024> recv_buf {};
@@ -1565,9 +1617,10 @@ void frp_runtime_accessor_agent::start_accessor_p2p_read_loop(const std::shared_
                 std::vector<std::uint8_t> encrypted(recv_buf.data(), recv_buf.data() + recv_size);
                 auto plaintext = frp_udp_decrypt(session->udp_recv_key, encrypted);
                 if (!plaintext) {
-                    FWARN("accessor flow {} failed to decrypt KCP payload size={}", session->flow_id, recv_size);
+                    FINFO("accessor flow {} failed to decrypt KCP payload size={}", session->flow_id, recv_size);
                     continue;
                 }
+                FINFO("accessor p2p KCP recv decrypted flow_id={} size={}", session->flow_id, plaintext->size());
                 session->pending_writes.emplace_back(reinterpret_cast<const char*>(plaintext->data()), plaintext->size());
                 handle_local_write_queue(session);
             }
@@ -1898,9 +1951,9 @@ void frp_runtime_accessor_agent::start_flow_endpoint_probe(const std::shared_ptr
                                                     config_.public_server_udp_port);
         if (!server_endpoint) return;
         session->endpoint_probe_attempts++;
-        FINFO("accessor flow_endpoint_probe attempt={} flow_id={} server={}:{}",
-              session->endpoint_probe_attempts, session->flow_id,
-              config_.public_server_host, config_.public_server_udp_port);
+        FINFO("accessor flow_endpoint_probe attempt={} flow_id={} local_port={} server={}:{} probe_size={}",
+              session->endpoint_probe_attempts, session->flow_id, local_port,
+              config_.public_server_host, config_.public_server_udp_port, encrypted.size());
         auto enc_ptr = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted));
         session->p2p_socket->async_send_to(asio::buffer(*enc_ptr), *server_endpoint,
                                            [enc_ptr](const std::error_code&, std::size_t) {});
@@ -1935,6 +1988,9 @@ void frp_runtime_accessor_agent::start_low_ttl_probe_round(const std::shared_ptr
     // Set socket TTL
     std::error_code ec;
     session->p2p_socket->set_option(asio::ip::unicast::hops(ttl), ec);
+    FINFO("low_ttl_probe round flow_id={} ttl={} round_index={} peer={}:{} packets={}",
+          session->flow_id, ttl, session->low_ttl_round_index,
+          session->p2p_peer_endpoint.address().to_string(), session->p2p_peer_endpoint.port(), kLowTtlPacketsPerRound);
     // Send kLowTtlPacketsPerRound packets
     for (int i = 0; i < kLowTtlPacketsPerRound; ++i) {
         auto buf = std::make_shared<std::array<std::uint8_t, 5>>(pkt);
@@ -1947,7 +2003,6 @@ void frp_runtime_accessor_agent::start_low_ttl_probe_round(const std::shared_ptr
     done.flow_id   = session->flow_id;
     done.ttl_value = ttl;
     channel_->send_command(done);
-    FINFO("low_ttl_probe round flow_id={} ttl={} round_index={}", session->flow_id, ttl, session->low_ttl_round_index);
     // Set per-round timeout (5 seconds)
     session->low_ttl_timer.expires_after(std::chrono::seconds(5));
     session->low_ttl_timer.async_wait([this, self = shared_from_this(), session](const std::error_code& ec) {

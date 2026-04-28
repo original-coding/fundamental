@@ -221,6 +221,7 @@ std::optional<std::vector<std::uint8_t>> frp_udp_decrypt(
 
     // Finalize decryption (verifies tag)
     if (EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len) != 1) {
+        FINFO("frp_udp_decrypt: AEAD tag verification failed packet_size={}", encrypted_packet.size());
         EVP_CIPHER_CTX_free(ctx);
         return std::nullopt;
     }

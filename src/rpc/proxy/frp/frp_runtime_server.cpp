@@ -48,6 +48,8 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
         [this, self = shared_from_this(), server, index](const asio::error_code& ec, std::size_t bytes_read) {
             if (!reference_.is_valid()) return;
             if (!ec && bytes_read > 0) {
+                FINFO("udp_server recv port_index={} bytes={} from={}:{}", index, bytes_read,
+                      server->remote_endpoint.address().to_string(), server->remote_endpoint.port());
                 // Try to decrypt the packet
                 std::vector<std::uint8_t> encrypted_packet(server->read_buf.data(), server->read_buf.data() + bytes_read);
 
@@ -60,6 +62,7 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                     auto plaintext = frp_udp_decrypt(startup_key, encrypted_packet);
                     if (plaintext) {
                         std::string probe_payload(plaintext->begin(), plaintext->end());
+                        FINFO("udp_server startup key decrypted payload_size={}", plaintext->size());
                         frp_runtime_command_base cmd;
                         if (Fundamental::io::from_json(probe_payload, cmd) && cmd.command == frp_runtime_p2p_probe_command) {
                             frp_runtime_p2p_probe_data probe;
@@ -77,6 +80,9 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                                 auto encrypted_resp = frp_udp_encrypt_string(resp_key, echo_json);
                                 if (!encrypted_resp.empty()) {
                                     auto resp_buf = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted_resp));
+                                    FINFO("startup_probe sending response to {}:{} resp_size={}",
+                                          server->remote_endpoint.address().to_string(), server->remote_endpoint.port(),
+                                          resp_buf->size());
                                     server->socket.async_send_to(
                                         asio::buffer(*resp_buf), server->remote_endpoint,
                                         [resp_buf](const std::error_code&, std::size_t) {});
@@ -91,6 +97,7 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                 // Per-flow key loop
                 {
                     std::scoped_lock<std::mutex> locker(runtime_mutex_);
+                    FINFO("udp_server trying per-flow keys p2p_flows={}", flows_by_id_.size());
                     for (const auto& [flow_id, flow] : flows_by_id_) {
                         if (flow.transport != frp_runtime_transport_p2p) continue;
 
@@ -99,6 +106,7 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                         if (plaintext) {
                             payload = std::string(plaintext->begin(), plaintext->end());
                             decrypted = true;
+                            FINFO("udp_server decrypted with provider_recv_key flow_id={}", flow_id);
                             break;
                         }
 
@@ -107,13 +115,15 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                         if (plaintext) {
                             payload = std::string(plaintext->begin(), plaintext->end());
                             decrypted = true;
+                            FINFO("udp_server decrypted with accessor_recv_key flow_id={}", flow_id);
                             break;
                         }
                     }
                 }
 
                 if (!decrypted) {
-                    FDEBUG("failed to decrypt UDP packet from {}", server->remote_endpoint.address().to_string());
+                    FINFO("failed to decrypt UDP packet from {}:{} size={}", server->remote_endpoint.address().to_string(),
+                          server->remote_endpoint.port(), bytes_read);
                     start_udp_receive(index);
                     return;
                 }
