@@ -14,13 +14,13 @@
 - `nat_type`
   节点级运行配置，表示该角色的 NAT 类型，取值为 `disabled` / `symmetric` / `full`。
 - `transport`
-  会话建立时选定的正式传输类型，正式取值仅有 `p2p` 与 `tcp_relay`。
+  会话建立时选定的正式传输类型，正式取值仅有 `tcp_relay`（p2p upgrade 通过独立流程完成，不作为 transport 枚举值）。
 - `udp echo probe`
   使用加密 JSON UDP 回显协议向 `public_server` 获取某个 UDP socket 外网 `ip:port` 的流程。
 - `startup_probe`
-  启动期全局 `udp echo probe`，用于判断当前运行时是否具备 P2P 能力。
+  启动期全局 `udp echo probe`，用于判断当前运行时的 NAT 类型。两次探测结果相同为 `full`，不同为 `symmetric`，失败为 `disabled`。
 - `flow_endpoint_probe`
-  单个 `p2p flow` 建立期的 `udp echo probe`，用于获取建联 UDP socket 的外网 `ip:port`。
+  单个 flow p2p upgrade 期的 `udp echo probe`，用于获取建联 UDP socket 的外网 `ip:port`。
 - `udp_punch`
   双方建联 UDP socket 间的直连打洞探测流程，详见 `udp_p2p_flow.md`。
 - `flow`
@@ -29,12 +29,12 @@
   建立期终结结果，只包含 `flow_ready` 与 `flow_failed`。
 - `session`
   `flow_ready` 之后进入会话期的自治数据面对象，不再受 `flow_id` 控制面驱动。
-- `relay_channel`
-  `tcp_relay` 路径下的会话期顶层数据面对象。
-- `p2p session`
-  `p2p` 路径下的会话期顶层数据面对象。
+- `proxy_data_channel`（`frp_proxy_data_channel`）
+  会话期顶层数据面对象，统一封装 relay 和 p2p 两条底层链路，对上层暴露统一的 KCP 传输接口。relay 建立后可发起 p2p upgrade，upgrade 成功后底层切换为 UDP，KCP 负责重传保证数据连续性。
 - `kcp session`
-  `p2p session` 的内部组成，不是顶层会话概念。
+  `proxy_data_channel` 内部的 KCP 实例，贯穿 relay 和 p2p 两个阶段，不是顶层会话概念。
+- `p2p upgrade`
+  relay 建立后，在同一 flow 上发起的 UDP 打洞升级流程。成功后 `proxy_data_channel` 底层从 TCP relay 切换为 UDP，失败则静默保持 relay。
 
 ## 3. 废弃词
 
@@ -47,6 +47,8 @@
 - `xtcp`
 - `stcp`
 - `low_ttl_probe`
+- `relay_channel`（改用 `proxy_data_channel`）
+- `p2p session`（改用 `proxy_data_channel`）
 
 ## 4. 角色职责
 
@@ -133,10 +135,10 @@
 
 ### 5.3 运行时状态
 
-- startup probe 结果：`probe_succeeded` / `probe_failed`
-- provider 对外 `join.nat_type`
+- startup probe 结果：`full` / `symmetric` / `disabled`
+- provider 对外 `join.nat_type`（由 startup probe 结果决定，非配置直传）
 - 单个 `flow` 的建立期状态
-- `flow_ready` 后的会话期自治对象
+- `flow_ready` 后的会话期自治对象（`proxy_data_channel`）
 
 运行时状态仅存在于内存对象与日志中，不写回配置，不做状态持久化或查询接口。进程退出后全部丢失。
 
@@ -160,13 +162,13 @@
 
 ### 7.3 流程
 
-1. 若 `nat_type=disabled`，跳过探测，本次运行视为 relay-only。
+1. 若 `nat_type=disabled`，跳过探测，本次运行视为 relay-only，`join.nat_type=disabled`。
 2. 创建一个 UDP socket。
 3. 生成 `probe_uuid`。
 4. 向 server UDP 端口 1 发送 `udp echo probe`，每 `200ms` 重发，最多 `10` 次，直到收到回包。
 5. 使用同一个 socket 对 server UDP 端口 2 重复同样流程。
 6. 比较两次回包中的外网 `ip:port`。
-7. 一致则 `probe_succeeded`；否则 `probe_failed`。
+7. 一致则 `nat_type=full`；不一致则 `nat_type=symmetric`；任一超时则 `nat_type=disabled`。
 8. 探测结束后，才进入后续 signal 流程。
 
 ### 7.4 日志
@@ -175,19 +177,22 @@
 
 - `probe_result_1=<ip:port>`
 - `probe_result_2=<ip:port>`
-- `p2p_probe_result=succeeded|failed`
+- `detected_nat_type=full|symmetric|disabled`
 
 ## 8. transport 选择规则
 
-`accessor` 是否选择 `transport=p2p`，只由以下条件共同决定：
+`accessor` 始终使用 `transport=tcp_relay` 发起 `create_flow`。
+
+p2p upgrade 是 relay 建立后的独立升级流程，由以下条件共同决定是否发起：
 
 - accessor 配置 `nat_type != disabled`
-- accessor startup probe 成功
+- accessor startup probe 结果 `!= disabled`
 - 服务目录里的 `provider_nat_type != disabled`
+- 双方不同时为 `symmetric`（服务器在 `create_flow` 时已拦截此情况）
 
-否则直接选择 `transport=tcp_relay`。
+不满足上述条件时，relay 建立后不发起 p2p upgrade，直接保持 relay 运行。
 
-`create_flow` 使用显式 `transport`，不再保留任何“偏好”字段。
+`create_flow` 使用显式 `transport=tcp_relay`，不再保留任何”偏好”字段。
 
 ## 9. flow 生命周期规则
 
@@ -202,47 +207,48 @@
 `flow_ready` 是唯一成功放流信号。  
 `flow_failed` 是建立期唯一失败终结信号。
 
-## 10. tcp_relay 建立期流程
+## 10. 建立期流程
 
-1. accessor 基于本地条件选择 `transport=tcp_relay`
-2. accessor 通过 signal 发送 `create_flow(service_name, tcp_relay)`
-3. server 返回 `accepted(flow_id)` 并向 provider 下发 `prepare_flow(flow_id, service_name, tcp_relay)`
-4. provider 与 accessor 各自新建一条 relay TCP 数据连接
-5. 双方用 `flow_id + runtime uuid` 做握手
-6. server 将两条 TCP 连接配对成 `relay_channel`
-7. provider 在 `relay_channel` 成立后连接 backend
-8. provider 发送 `flow_ready(flow_id)` 或 `flow_failed(flow_id, reason, message)`
-9. server 将 terminal result 同步发送给 accessor 后销毁该 `flow_id`
-10. `relay_channel` 进入自治运行
+所有 flow 统一走 `tcp_relay` 建立，relay 就绪后按条件发起 p2p upgrade。
+
+### 10.1 relay 建立期流程
+
+1. accessor 发送 `create_flow(service_name, tcp_relay)`
+2. server 返回 `accepted(flow_id)` 并向 provider 下发 `prepare_flow(flow_id, service_name, tcp_relay)`
+3. provider 与 accessor 各自新建一条 relay TCP 数据连接，同时创建 KCP 实例（KCP output → TCP relay）
+4. 双方用 `flow_id + runtime uuid` 做握手
+5. server 将两条 TCP 连接配对成 relay 通道
+6. provider 在 relay 通道成立后连接 backend
+7. provider 发送 `flow_ready(flow_id)` 或 `flow_failed(flow_id, reason, message)`
+8. server 将 terminal result 同步发送给 accessor 后销毁该 `flow_id`
+9. `proxy_data_channel` 进入会话期自治运行，底层为 TCP relay
+
+### 10.2 p2p upgrade 流程
+
+relay 建立后，accessor 与 provider 各自收到 `flow_ready` 后立即发起 p2p upgrade（若满足条件）：
+
+1. accessor 与 provider 各自向 server 发送 `p2p_upgrade_request(flow_id)`
+2. server 在同一 flow 上标记 `p2p_upgrade_pending`，协调双方执行 `flow_endpoint_probe`
+3. 双方各自创建建联 UDP socket，执行 `flow_endpoint_probe`（向 server UDP 端口发探测包）
+4. server 在双方都 `flow_endpoint_ready` 后，分别下发 `flow_p2p_peer(flow_id, peer_ip, peer_port, peer_nat_type)`
+5. 双方执行 `udp_punch`（详见 `udp_p2p_flow.md`）
+6. 任意一方收到对端 6 字节探测包即判成功，向 server 发送 `p2p_connected(flow_id, matched_peer_local_port)`
+7. server 立即向另一侧中转 `peer_p2p_connected(flow_id, matched_peer_local_port)`
+8. 双方各自收到成功信号后，在 `proxy_data_channel` 内部将 KCP output 从 TCP relay 切换为 UDP socket
+9. KCP 对未 ACK 的 segment 通过 UDP 路径重传，保证数据连续性
+10. release TCP relay 连接，停止 relay 接收
+11. `proxy_data_channel` 底层切换完成，触发 `on_p2p_upgraded` 回调
+
+**upgrade 失败处理：**
+
+- probe 超时或 punch 超时：静默放弃，relay 继续运行，触发 `on_p2p_upgrade_failed` 回调
+- 不影响已建立的 relay 会话
 
 说明：
 
-- relay 建立成功日志统一打印：`transport / flow_id / service_name / local / remote`
-- `relay_channel` 可保留只读元信息：
-  - `flow_id`
-  - `provider_uuid`
-  - `accessor_uuid`
-  - `service_name`
-  - `transport`
-- 这些元信息只用于日志与诊断，不参与后续控制逻辑
-
-## 11. p2p 建立期流程
-
-1. accessor 基于本地条件选择 `transport=p2p`
-2. accessor 通过 signal 发送 `create_flow(service_name, p2p)`
-3. server 返回 `accepted(flow_id)` 并向 provider 下发 `prepare_flow(flow_id, service_name, p2p)`
-4. provider 与 accessor 各自创建建联 UDP socket
-5. 双方执行 `flow_endpoint_probe`
-6. server 在双方都 `flow_endpoint_ready` 后，分别下发 `flow_p2p_peer(flow_id, peer_ip, peer_port, peer_nat_type)`
-7. 双方执行 `udp_punch`（详见 `udp_p2p_flow.md`）
-8. 任意一方收到对端 6 字节探测包即判成功，向 server 发送 `p2p_connected(flow_id, matched_peer_local_port)`
-9. server 立即向另一侧中转 `peer_p2p_connected(flow_id, matched_peer_local_port)`
-10. 双方停止 `udp_punch`，进入成功分支
-11. accessor 立即启动 1 字节 UDP keepalive，双方切入 KCP 数据面
-12. provider 在 KCP 数据面可用后连接 backend
-13. provider 发送 `flow_ready(flow_id)` 或 `flow_failed(flow_id, reason, message)`
-14. server 将 terminal result 同步发送给 accessor 后销毁该 `flow_id`
-15. 已建立 `p2p session` 自治运行
+- relay 建立成功日志统一打印：`transport=tcp_relay / flow_id / service_name / local / remote`
+- p2p upgrade 成功日志打印：`transport=p2p / flow_id / service_name / local / remote`
+- `proxy_data_channel` 可保留只读元信息：`flow_id`、`provider_uuid`、`accessor_uuid`、`service_name`、当前底层 transport
 
 ## 12. udp echo probe
 
@@ -298,7 +304,10 @@
 
 ## 15. KCP 数据面
 
-- `transport=p2p` 的数据面运行在建联 UDP socket 上
+- KCP 是所有 flow 的统一传输层，relay 和 p2p 均走 KCP
+- relay 阶段：KCP output 通过 TCP relay 连接发送
+- p2p 阶段：KCP output 通过建联 UDP socket 发送
+- 切换时 KCP 实例不重建，仅替换底层 output 路径；KCP 对未 ACK 的 segment 通过新路径重传
 - KCP 使用非流式模式
 - `flow_id` 直接作为 KCP `conv`
 - 业务数据仍由上层读事件驱动
@@ -308,18 +317,19 @@
 
 ### 16.1 flow 创建与传输选择
 
-- `create_flow(service_name, transport)`
+- `create_flow(service_name, transport)`（transport 固定为 `tcp_relay`）
 - `prepare_flow(flow_id, service_name, transport)`
 - `create_flow_result`
 
 `create_flow_result` 最小结果集合：
 
 - `accepted`
-- `p2p_unavailable`
+- `p2p_unavailable`（保留，用于服务器拦截不可行的 p2p upgrade 请求）
 - `rejected`
 
-### 16.2 endpoint probe
+### 16.2 p2p upgrade 协调
 
+- `p2p_upgrade_request(flow_id)`（accessor/provider → server，relay 就绪后发起）
 - `flow_endpoint_ready(flow_id, external_ip, external_port)`
 - `flow_p2p_peer(flow_id, peer_ip, peer_port, peer_nat_type)`
 
@@ -354,15 +364,16 @@
 
 ### 18.1 顶层会话对象
 
-- `relay_channel`
-- `p2p session`
+- `proxy_data_channel`（`frp_proxy_data_channel`）：统一封装 relay 和 p2p 两条底层链路
 
 ### 18.2 会话内部组件
 
-- `accepted tcp connection`
-- `backend tcp connection`
-- `kcp session`
-- `keepalive timer`
+- `accepted tcp connection`（accessor 侧）
+- `backend tcp connection`（provider 侧）
+- `kcp session`（贯穿 relay 和 p2p 阶段）
+- TCP relay 连接（relay 阶段底层）
+- UDP socket（p2p 阶段底层，upgrade 成功后替换 TCP relay）
+- `keepalive timer`（p2p 阶段）
 
 ### 18.3 生命周期规则
 
@@ -370,6 +381,7 @@
 - 若最终进入 `flow_failed`，这些临时对象必须全部销毁
 - `flow_ready` 同步发送完成后，相关对象进入会话期自治状态
 - 进入会话期后，不再产生任何 `flow_failed`
+- p2p upgrade 成功后，TCP relay 连接在 KCP output 切换完成后 release
 
 ## 19. 状态机
 
@@ -378,26 +390,34 @@
 - `disabled_by_config`
 - `probing_udp_port_1`
 - `probing_udp_port_2`
-- `probe_succeeded`
-- `probe_failed`
+- `detected_full`
+- `detected_symmetric`
+- `probe_failed`（超时，视为 disabled）
 
 ### 19.2 accessor flow
 
-- `waiting_transport_decision`
-- `waiting_flow_endpoint`
-- `waiting_punch_result`（仅 P2P）
-- `waiting_final_result`
-- `established`
+- `waiting_transport_decision`（已移除，始终 tcp_relay）
+- `waiting_relay_ready`
+- `established`（relay 运行中）
+- `upgrading_to_p2p`（可选，relay 运行中同时进行 upgrade）
 - `closed`
 
 ### 19.3 provider flow
 
 - `waiting_prepare`
-- `waiting_flow_endpoint`
-- `waiting_punch_result`（仅 P2P）
+- `waiting_relay_ready`
 - `waiting_backend_connect`
-- `established`
+- `established`（relay 运行中）
+- `upgrading_to_p2p`（可选，relay 运行中同时进行 upgrade）
 - `closed`
+
+### 19.4 p2p upgrade（proxy_data_channel 内部）
+
+- `idle`（未发起）
+- `waiting_flow_endpoint`
+- `waiting_punch_result`
+- `upgraded`（底层已切换为 UDP）
+- `upgrade_failed`（静默，relay 继续）
 
 ## 20. 日志规则
 
@@ -413,7 +433,8 @@
 
 要求：
 
-- `transport` 正式取值仅有 `p2p` 与 `tcp_relay`
+- relay 建立时 `transport=tcp_relay`
+- p2p upgrade 成功时额外输出一条 `transport=p2p` 的建立成功日志
 - `service_name` 必须非空
 - `local/remote` 一律指当前数据面 socket 自身端点
 
@@ -421,9 +442,9 @@
 
 `p2p` 主线应能观测到：
 
-- startup `udp echo probe` 结果日志
+- startup `udp echo probe` 结果日志（含 `detected_nat_type`）
 - `udp_punch` 成功日志
-- `p2p` 建立成功日志
+- p2p upgrade 成功日志（`transport=p2p`）
 
 ### 20.3 迟到消息
 
@@ -433,9 +454,8 @@
 
 ## 21. 失败与回退规则
 
-- `p2p_unavailable` 触发同一条本地 TCP 连接上的新 `tcp_relay flow`
-- `p2p -> tcp_relay` fallback 保留在实现中，但不是本轮主线验收项
-- fallback 只要求代码路径自洽、日志语义正确、不污染主线状态机
+- relay 建立失败：`flow_failed(relay_channel_open_failed)`，accessor 不重试
+- p2p upgrade 失败（probe 超时或 punch 超时）：静默放弃，relay 继续运行，触发 `on_p2p_upgrade_failed`
 - relay 本身不再设计额外重试
 
 ## 22. 原型链路验收
@@ -444,28 +464,29 @@
 
 前提：
 
-- 至少一侧 `nat_type=disabled`
+- 至少一侧 `nat_type=disabled`，或双方均为 `symmetric`
 
 成功判据：
 
-- 明确观测到 `transport=tcp_relay`
-- 明确观测到建立成功日志
+- 明确观测到 `transport=tcp_relay` 建立成功日志
 - 本地 client 经 accessor 访问 backend 成功
+- 无 p2p upgrade 发起（条件不满足时）
 
-### 22.2 p2p 主线
+### 22.2 p2p upgrade 主线
 
 前提：
 
 - 双方 `nat_type != disabled`
 - 双方 startup probe 成功
+- 不同时为 `symmetric`
 
 成功判据：
 
-- 明确观测到 startup `udp echo probe` 结果日志
+- 明确观测到 startup `udp echo probe` 结果日志（`detected_nat_type`）
+- 明确观测到 `transport=tcp_relay` 建立成功日志（relay 先建立）
 - 明确观测到 `udp_punch` 成功日志
-- 明确观测到 `transport=p2p`
-- 明确观测到建立成功日志
-- 本地 client 经 accessor 访问 backend 成功
+- 明确观测到 `transport=p2p` upgrade 成功日志
+- 本地 client 经 accessor 访问 backend 成功，数据经 p2p 通道传输
 
 ### 22.3 验收环境
 

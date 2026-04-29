@@ -4,12 +4,14 @@
 
 双方在开始打洞前，已通过信令通道完成：
 
-1. `create_flow(transport=p2p)`
-2. `prepare_flow(p2p)`
+1. `create_flow(transport=tcp_relay)` → relay 建立，`proxy_data_channel` 进入会话期
+2. 双方各自收到 `flow_ready` 后，向 server 发送 `p2p_upgrade_request(flow_id)`
 3. 各自创建建联 UDP socket
 4. flow 级 `udp echo probe`（向 public_server 发探测包，获取自身外部 IP:Port）
 5. `flow_endpoint_ready`（server 确认双方端点已就绪）
 6. `flow_p2p_peer`（双方获知对端外部 IP:Port 及对端 NAT 类型）
+
+打洞期间 relay 保持运行，数据持续通过 TCP relay 传输。
 
 ## 2. NAT 类型
 
@@ -61,6 +63,13 @@ Symmetric NAT 对不同目标分配不同的外部端口，因此对端通过 `u
 ```text
 accessor                  public_server                  provider
     |                           |                           |
+    |--- p2p_upgrade_request -->|<-- p2p_upgrade_request ---|
+    |   (relay 已运行)           |        (relay 已运行)     |
+    |                           |                           |
+    | 创建建联 UDP socket        |        创建建联 UDP socket |
+    | 执行 flow_endpoint_probe  |        执行 flow_endpoint_probe
+    |--- flow_endpoint_ready -->|<-- flow_endpoint_ready ---|
+    |                           |                           |
     |<------ flow_p2p_peer -----|----- flow_p2p_peer ------>|
     |   (含对端 nat_type)        |        (含对端 nat_type)  |
     |                           |                           |
@@ -79,7 +88,10 @@ accessor                  public_server                  provider
     | 保留命中的 socket          |          保留对应 socket  |
     | 关闭其余 socket            |          关闭其余 socket  |
     |                           |                           |
-    |          [双方进入 KCP 数据面]                         |
+    | KCP output 切换为 UDP      |     KCP output 切换为 UDP |
+    | release TCP relay          |     release TCP relay     |
+    |                           |                           |
+    |          [proxy_data_channel 底层切换完成]             |
 ```
 
 双方收到 `flow_p2p_peer` 后立即开始向对端发探测包，无需等待对方先发。
@@ -113,13 +125,14 @@ accessor                  public_server                  provider
 
 ## 8. 成功后本地动作
 
-1. 从探测包中读出对端 `local_port`，保留对应 socket，关闭其余 127 个 socket
+1. 从探测包中读出对端 `local_port`，保留对应 socket，关闭其余 socket
 2. 向 public_server 发送 `p2p_connected(flow_id, matched_peer_local_port)`
 3. 收到 `peer_p2p_connected(flow_id, matched_peer_local_port)` 后，另一侧同样执行步骤 1
 4. accessor 启动 1 字节 UDP keepalive
-5. 双方切入 KCP 数据面
-6. provider 执行 backend connect
-7. accessor 等待 `flow_ready`
+5. `proxy_data_channel` 内部将 KCP output 从 TCP relay 切换为 UDP socket
+6. KCP 对未 ACK 的 segment 通过 UDP 路径重传，保证数据连续性
+7. release TCP relay 连接，停止 relay 接收
+8. 触发 `on_p2p_upgraded` 回调
 
 ## 9. 与 UDP 小包协议的关系
 
