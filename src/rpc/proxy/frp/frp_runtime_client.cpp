@@ -473,9 +473,9 @@ void run_startup_probe(const asio::any_io_executor& executor,
                        const std::string& traffic_secret,
                        const std::string& public_server_host,
                        const std::vector<std::uint16_t>& udp_ports,
-                       std::function<void(bool)> on_done) {
+                       std::function<void(frp_runtime_nat_type)> on_done) {
     if (udp_ports.empty()) {
-        on_done(false);
+        on_done(frp_runtime_nat_type_disabled);
         return;
     }
 
@@ -491,7 +491,7 @@ void run_startup_probe(const asio::any_io_executor& executor,
         std::size_t port_index = 0;
         std::size_t attempts = 0;
         bool done = false;
-        std::function<void(bool)> on_done;
+        std::function<void(frp_runtime_nat_type)> on_done;
         std::string public_server_host;
         std::vector<std::uint16_t> udp_ports;
         std::string traffic_secret;
@@ -512,13 +512,13 @@ void run_startup_probe(const asio::any_io_executor& executor,
     state->socket->open(asio::ip::udp::v4(), ec);
     if (ec) {
         FINFO("startup_probe socket open failed err={}", ec.message());
-        state->on_done(false);
+        state->on_done(frp_runtime_nat_type_disabled);
         return;
     }
     state->socket->bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 0), ec);
     if (ec) {
         FINFO("startup_probe socket bind failed err={}", ec.message());
-        state->on_done(false);
+        state->on_done(frp_runtime_nat_type_disabled);
         return;
     }
     FINFO("startup_probe socket bound local_port={}", state->socket->local_endpoint(ec).port());
@@ -554,11 +554,17 @@ void run_startup_probe(const asio::any_io_executor& executor,
                             state->attempts = 0;
                             if (state->port_index >= state->udp_ports.size()) {
                                 state->done = true;
-                                bool ok = !state->result1.empty() &&
-                                          (state->udp_ports.size() == 1 || state->result1 == state->result2);
-                                FINFO("startup_probe probe_result_1={} probe_result_2={} p2p_probe_result={}",
-                                      state->result1, state->result2, ok ? "succeeded" : "failed");
-                                state->on_done(ok);
+                                frp_runtime_nat_type detected;
+                                if (state->result1.empty()) {
+                                    detected = frp_runtime_nat_type_disabled;
+                                } else if (state->udp_ports.size() == 1 || state->result1 == state->result2) {
+                                    detected = frp_runtime_nat_type_full;
+                                } else {
+                                    detected = frp_runtime_nat_type_symmetric;
+                                }
+                                FINFO("startup_probe probe_result_1={} probe_result_2={} detected_nat_type={}",
+                                      state->result1, state->result2, static_cast<int>(detected));
+                                state->on_done(detected);
                                 return;
                             }
                             (*do_probe)();
@@ -580,14 +586,14 @@ void run_startup_probe(const asio::any_io_executor& executor,
             state->done = true;
             FINFO("startup_probe probe_result_1={} probe_result_2={} p2p_probe_result=failed (timeout)",
                   state->result1, state->result2);
-            state->on_done(false);
+            state->on_done(frp_runtime_nat_type_disabled);
             return;
         }
         auto server_endpoint = resolve_udp_endpoint(state->executor, state->public_server_host,
                                                     state->udp_ports[state->port_index]);
         if (!server_endpoint) {
             state->done = true;
-            state->on_done(false);
+            state->on_done(frp_runtime_nat_type_disabled);
             return;
         }
         std::error_code local_ec;
@@ -602,7 +608,7 @@ void run_startup_probe(const asio::any_io_executor& executor,
         auto encrypted = frp_udp_encrypt_string(state->send_key, payload);
         if (encrypted.empty()) {
             state->done = true;
-            state->on_done(false);
+            state->on_done(frp_runtime_nat_type_disabled);
             return;
         }
         state->attempts++;
@@ -636,9 +642,9 @@ void frp_runtime_provider_agent::start() {
         run_startup_probe(reconnect_timer_.get_executor(), config_.traffic_secret, config_.public_server_host,
                           { config_.public_server_udp_port,
                             static_cast<std::uint16_t>(config_.public_server_udp_port + 1) },
-                          [this, self = shared_from_this()](bool ok) {
+                          [this, self = shared_from_this()](frp_runtime_nat_type detected) {
                               if (!reference_.is_valid()) return;
-                              startup_probe_succeeded_ = ok;
+                              probed_nat_type_ = detected;
                               connect_signal_channel();
                           });
     } else {
@@ -1119,8 +1125,9 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         join.role         = frp_runtime_provider_role;
         join.uuid         = uuid_;
         join.register_key = config_.register_key;
-        join.nat_type = (config_.nat_type != frp_runtime_nat_type_disabled && startup_probe_succeeded_)
-                            ? config_.nat_type
+        join.nat_type = (config_.nat_type != frp_runtime_nat_type_disabled &&
+                         probed_nat_type_ != frp_runtime_nat_type_disabled)
+                            ? probed_nat_type_
                             : frp_runtime_nat_type_disabled;
         channel_->send_command(join);
         return;
@@ -1599,9 +1606,9 @@ void frp_runtime_accessor_agent::start() {
         run_startup_probe(reconnect_timer_.get_executor(), config_.traffic_secret, config_.public_server_host,
                           { config_.public_server_udp_port,
                             static_cast<std::uint16_t>(config_.public_server_udp_port + 1) },
-                          [this, self = shared_from_this()](bool ok) {
+                          [this, self = shared_from_this()](frp_runtime_nat_type detected) {
                               if (!reference_.is_valid()) return;
-                              startup_probe_succeeded_ = ok;
+                              probed_nat_type_ = detected;
                               connect_signal_channel();
                           });
     } else {
@@ -1767,7 +1774,8 @@ void frp_runtime_accessor_agent::start_accept_loop(const std::shared_ptr<listene
                     session->service_name = listener->service_name;
                     session->nat_type     = listener->nat_type;
                     pending_sessions_[session->session_id] = session;
-                    bool use_p2p = (listener->nat_type != frp_runtime_nat_type_disabled) && startup_probe_succeeded_;
+                    bool use_p2p = (listener->nat_type != frp_runtime_nat_type_disabled) &&
+                                   (probed_nat_type_ != frp_runtime_nat_type_disabled);
                     request_flow(session, use_p2p);
                 }
             }
@@ -1924,8 +1932,9 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         join.role         = frp_runtime_accessor_role;
         join.uuid         = uuid_;
         join.register_key = config_.register_key;
-        join.nat_type = (config_.nat_type != frp_runtime_nat_type_disabled && startup_probe_succeeded_)
-                            ? config_.nat_type
+        join.nat_type = (config_.nat_type != frp_runtime_nat_type_disabled &&
+                         probed_nat_type_ != frp_runtime_nat_type_disabled)
+                            ? probed_nat_type_
                             : frp_runtime_nat_type_disabled;
         channel_->send_command(join);
         return;

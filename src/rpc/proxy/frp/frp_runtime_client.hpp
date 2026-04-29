@@ -161,7 +161,7 @@ private:
     asio::steady_timer reconnect_timer_;
     std::shared_ptr<frp_runtime_signal_client_channel> channel_;
     std::unordered_map<std::uint32_t, std::shared_ptr<provider_flow_runtime>> flows_;
-    bool startup_probe_succeeded_ = false;
+    frp_runtime_nat_type probed_nat_type_ = frp_runtime_nat_type_disabled;
 };
 
 class frp_runtime_accessor_agent : public std::enable_shared_from_this<frp_runtime_accessor_agent>,
@@ -226,7 +226,7 @@ private:
     std::unordered_map<std::uint32_t, std::shared_ptr<accessor_session_context>> sessions_by_flow_id_;
     std::unordered_map<std::uint64_t, std::shared_ptr<accessor_session_context>> pending_sessions_;
     std::uint64_t next_session_id_ = 1;
-    bool startup_probe_succeeded_ = false;
+    frp_runtime_nat_type probed_nat_type_ = frp_runtime_nat_type_disabled;
 };
 
 } // namespace network::proxy
