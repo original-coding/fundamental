@@ -776,7 +776,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             handle_backend_write_queue(flow);
         });
         flow->data_channel->set_on_punch_succeeded([this, self = shared_from_this(), flow](std::uint16_t matched_port) {
-            if (!reference_.is_valid() || !channel_ || flow->closed) return;
+            if (!reference_.is_valid() || !channel_) return;
             frp_runtime_p2p_connected_data connected;
             connected.command = frp_runtime_p2p_connected_command;
             connected.flow_id = flow->flow_id;
@@ -784,7 +784,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             channel_->send_command(connected);
         });
         flow->data_channel->set_on_p2p_upgraded([this, self = shared_from_this(), flow] {
-            if (!reference_.is_valid() || flow->closed) return;
+            if (!reference_.is_valid()) return;
             FINFO("provider flow {} p2p upgrade complete", flow->flow_id);
             log_provider_channel_established(
                 flow->flow_id, flow->service_name, "p2p",
@@ -837,7 +837,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         auto it = flows_.find(peer.flow_id);
         if (it == flows_.end()) return;
         auto flow = it->second;
-        if (flow->closed || !flow->data_channel) return;
+        if (!flow->data_channel) return;
         FINFO("provider flow {} flow_p2p_peer peer={}:{} peer_nat_type={}",
               flow->flow_id, peer.peer_host, peer.peer_port, static_cast<int>(peer.peer_nat_type));
         flow->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type);
@@ -852,7 +852,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         auto it = flows_.find(connected.flow_id);
         if (it == flows_.end()) return;
         auto flow = it->second;
-        if (flow->closed || !flow->data_channel) return;
+        if (!flow->data_channel) return;
         FINFO("provider flow {} peer_p2p_connected matched_port={}", flow->flow_id, connected.matched_peer_local_port);
         flow->data_channel->on_peer_p2p_connected(connected.matched_peer_local_port);
         return;
@@ -1272,7 +1272,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             handle_local_write_queue(session);
         });
         session->data_channel->set_on_punch_succeeded([this, self = shared_from_this(), session](std::uint16_t matched_port) {
-            if (!reference_.is_valid() || !channel_ || session->closed) return;
+            if (!reference_.is_valid() || !channel_) return;
             frp_runtime_p2p_connected_data connected;
             connected.command = frp_runtime_p2p_connected_command;
             connected.flow_id = session->flow_id;
@@ -1280,7 +1280,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             channel_->send_command(connected);
         });
         session->data_channel->set_on_p2p_upgraded([this, self = shared_from_this(), session] {
-            if (!reference_.is_valid() || session->closed) return;
+            if (!reference_.is_valid()) return;
             FINFO("accessor session {} flow {} p2p upgrade complete", session->session_id, session->flow_id);
             log_accessor_channel_established(
                 session->session_id, session->flow_id, session->service_name, "p2p",
@@ -1334,7 +1334,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         auto it = sessions_by_flow_id_.find(peer.flow_id);
         if (it == sessions_by_flow_id_.end()) return;
         auto session = it->second;
-        if (session->closed || !session->data_channel) return;
+        if (!session->data_channel) return;
         FINFO("accessor session {} flow {} flow_p2p_peer peer={}:{} peer_nat_type={}",
               session->session_id, session->flow_id, peer.peer_host, peer.peer_port,
               static_cast<int>(peer.peer_nat_type));
@@ -1350,7 +1350,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         auto it = sessions_by_flow_id_.find(connected.flow_id);
         if (it == sessions_by_flow_id_.end()) return;
         auto session = it->second;
-        if (session->closed || !session->data_channel) return;
+        if (!session->data_channel) return;
         FINFO("accessor session {} flow {} peer_p2p_connected matched_port={}",
               session->session_id, session->flow_id, connected.matched_peer_local_port);
         session->data_channel->on_peer_p2p_connected(connected.matched_peer_local_port);
@@ -1458,19 +1458,34 @@ void frp_runtime_accessor_agent::fail_session(const std::shared_ptr<accessor_ses
     if (session->closed) return;
     session->closed = true;
     session->peer_closed = true;
-    FWARN("accessor session flow_id={} service_name={} closed reason={}", session->flow_id, session->service_name, reason);
+    FWARN("accessor session flow_id={} service_name={} closed reason={}",
+          session->flow_id, session->service_name, reason);
+
+    // Keep the data_channel alive briefly so that P2P upgrade can complete
+    // even after the local client has disconnected. The UDP socket must stay
+    // open to receive punch packets from the peer.
+    // Schedule deferred cleanup via a timer.
     if (session->data_channel) {
-        session->data_channel->release_obj();
-        session->data_channel = nullptr;
+        auto timer = std::make_shared<asio::steady_timer>(session->local_socket.get_executor());
+        timer->expires_after(std::chrono::seconds(5));
+        auto flow_id = session->flow_id;
+        timer->async_wait([this, self = shared_from_this(), flow_id, timer](const std::error_code&) {
+            auto it = sessions_by_flow_id_.find(flow_id);
+            if (it != sessions_by_flow_id_.end()) {
+                if (it->second->data_channel) {
+                    it->second->data_channel->release_obj();
+                    it->second->data_channel = nullptr;
+                }
+                sessions_by_flow_id_.erase(it);
+            }
+            });
     }
+
     std::error_code ec;
     session->local_socket.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
     session->local_socket.close(ec);
-    if (session->flow_id != 0) {
-        sessions_by_flow_id_.erase(session->flow_id);
-    } else {
-        pending_sessions_.erase(session->session_id);
-    }
+    // NOTE: session stays in sessions_by_flow_id_ until the deferred cleanup fires,
+    // so that flow_p2p_peer / peer_p2p_connected can still be delivered.
 }
 
 } // namespace network::proxy

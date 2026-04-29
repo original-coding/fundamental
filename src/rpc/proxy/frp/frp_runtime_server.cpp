@@ -434,7 +434,9 @@ bool frp_runtime_public_server::forward_flow_closed(const std::shared_ptr<frp_ru
             auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
             if (provider_it != providers_by_uuid_.end()) peer_session = provider_it->second.session.lock();
         }
-        flows_by_id_.erase(flow_it);
+        // Keep flow in flows_by_id_ so that in-flight P2P upgrade messages
+        // (p2p_connected, peer_p2p_connected) can still be processed.
+        // release_session_state() will erase it when data sessions disconnect.
     }
     if (peer_session) peer_session->send_command(data);
     return true;
@@ -498,20 +500,19 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
             return false;
         }
         auto& flow = flow_it->second;
-        if (!flow.provider_p2p_upgrade_requested || !flow.accessor_p2p_upgrade_requested) {
-            error_message = "p2p upgrade not requested by both sides yet";
-            return false;
-        }
 
-        p2p_probe_state* current = nullptr;
-        if (data.uuid == flow.provider_uuid) {
-            current = &flow.provider_probe;
-        } else if (data.uuid == flow.accessor_uuid) {
-            current = &flow.accessor_probe;
-        } else {
+        const bool is_provider = (data.uuid == flow.provider_uuid);
+        const bool is_accessor = (data.uuid == flow.accessor_uuid);
+        if (!is_provider && !is_accessor) {
             error_message = "flow uuid mismatch";
             return false;
         }
+
+        // Treat probe as implicit upgrade request — set the flag for the probing side
+        if (is_provider) flow.provider_p2p_upgrade_requested = true;
+        if (is_accessor) flow.accessor_p2p_upgrade_requested = true;
+
+        p2p_probe_state* current = is_provider ? &flow.provider_probe : &flow.accessor_probe;
         current->local_ip          = data.local_ip;
         current->local_port        = data.local_port;
         current->observed_endpoint = remote_endpoint;
@@ -519,6 +520,20 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         FINFO("register_p2p_probe flow_id={} uuid={} local_ip={} local_port={} observed={}:{}",
               data.flow_id, data.uuid, data.local_ip, data.local_port,
               remote_endpoint.address().to_string(), remote_endpoint.port());
+
+        // Check NAT compatibility once both sides have signalled intent
+        if (flow.provider_p2p_upgrade_requested && flow.accessor_p2p_upgrade_requested) {
+            auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
+            auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
+            if (provider_it != providers_by_uuid_.end() && accessor_it != accessors_by_uuid_.end()) {
+                std::uint8_t p_nat = provider_it->second.nat_type;
+                std::uint8_t a_nat = accessor_it->second.nat_type;
+                if (p_nat == frp_runtime_nat_type_disabled || a_nat == frp_runtime_nat_type_disabled ||
+                    (p_nat == frp_runtime_nat_type_symmetric && a_nat == frp_runtime_nat_type_symmetric)) {
+                    return true; // p2p not viable, probe recorded but no coordination
+                }
+            }
+        }
 
         if (!flow.provider_probe.ready || !flow.accessor_probe.ready) {
             return true;
@@ -632,6 +647,8 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
     std::string accessor_uuid;
     std::uint8_t provider_nat = frp_runtime_nat_type_disabled;
     std::uint8_t accessor_nat = frp_runtime_nat_type_disabled;
+    std::shared_ptr<frp_runtime_signal_session> provider_signal_session;
+    std::shared_ptr<frp_runtime_signal_session> accessor_signal_session;
     {
         std::scoped_lock<std::mutex> locker(runtime_mutex_);
         auto flow_it = flows_by_id_.find(data.flow_id);
@@ -681,10 +698,67 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
 
     if (both_requested) {
         FINFO("handle_p2p_upgrade_request flow_id={} both sides ready, p2p upgrade coordinated", data.flow_id);
-        // Both sides will now send p2p_probe packets to the UDP server.
-        // No explicit notification needed — register_p2p_probe will handle the rest.
-        (void)provider_uuid;
-        (void)accessor_uuid;
+
+        // Check if probes already arrived before the second upgrade request.
+        // If both probes are ready, build and send peer info immediately.
+        frp_runtime_flow_p2p_peer_data provider_peer;
+        frp_runtime_flow_p2p_peer_data accessor_peer;
+        provider_peer.command = frp_runtime_flow_p2p_peer_command;
+        accessor_peer.command = frp_runtime_flow_p2p_peer_command;
+        frp_runtime_flow_endpoint_ready_data provider_ep_ready;
+        frp_runtime_flow_endpoint_ready_data accessor_ep_ready;
+        provider_ep_ready.command = frp_runtime_flow_endpoint_ready_command;
+        accessor_ep_ready.command = frp_runtime_flow_endpoint_ready_command;
+        bool probes_ready = false;
+
+        {
+            std::scoped_lock<std::mutex> locker(runtime_mutex_);
+            auto flow_it = flows_by_id_.find(data.flow_id);
+            if (flow_it == flows_by_id_.end()) return true;
+            auto& flow = flow_it->second;
+            if (!flow.provider_probe.ready || !flow.accessor_probe.ready) return true;
+            probes_ready = true;
+
+            const bool same_public_ip =
+                flow.provider_probe.observed_endpoint.address() == flow.accessor_probe.observed_endpoint.address();
+            provider_peer.flow_id      = data.flow_id;
+            accessor_peer.flow_id      = data.flow_id;
+            provider_peer.use_local_candidate = same_public_ip;
+            accessor_peer.use_local_candidate = same_public_ip;
+            if (same_public_ip && !flow.accessor_probe.local_ip.empty() && flow.accessor_probe.local_port != 0) {
+                provider_peer.peer_host = flow.accessor_probe.local_ip;
+                provider_peer.peer_port = flow.accessor_probe.local_port;
+            } else {
+                provider_peer.peer_host = flow.accessor_probe.observed_endpoint.address().to_string();
+                provider_peer.peer_port = flow.accessor_probe.observed_endpoint.port();
+            }
+            if (same_public_ip && !flow.provider_probe.local_ip.empty() && flow.provider_probe.local_port != 0) {
+                accessor_peer.peer_host = flow.provider_probe.local_ip;
+                accessor_peer.peer_port = flow.provider_probe.local_port;
+            } else {
+                accessor_peer.peer_host = flow.provider_probe.observed_endpoint.address().to_string();
+                accessor_peer.peer_port = flow.provider_probe.observed_endpoint.port();
+            }
+            provider_ep_ready.flow_id       = data.flow_id;
+            provider_ep_ready.external_ip   = flow.provider_probe.observed_endpoint.address().to_string();
+            provider_ep_ready.external_port = flow.provider_probe.observed_endpoint.port();
+            accessor_ep_ready.flow_id       = data.flow_id;
+            accessor_ep_ready.external_ip   = flow.accessor_probe.observed_endpoint.address().to_string();
+            accessor_ep_ready.external_port = flow.accessor_probe.observed_endpoint.port();
+            auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
+            if (provider_it != providers_by_uuid_.end()) provider_signal_session = provider_it->second.session.lock();
+            auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
+            if (accessor_it != accessors_by_uuid_.end()) accessor_signal_session = accessor_it->second.session.lock();
+            provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : frp_runtime_nat_type_disabled;
+            accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : frp_runtime_nat_type_disabled;
+        }
+
+        if (probes_ready) {
+            if (provider_signal_session) provider_signal_session->send_command(provider_ep_ready);
+            if (accessor_signal_session) accessor_signal_session->send_command(accessor_ep_ready);
+            if (provider_signal_session) provider_signal_session->send_command(provider_peer);
+            if (accessor_signal_session) accessor_signal_session->send_command(accessor_peer);
+        }
     }
     return true;
 }

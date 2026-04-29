@@ -235,7 +235,7 @@ void frp_proxy_data_channel::kcp_send_raw(const char* data, std::size_t size) {
 
 void frp_proxy_data_channel::start_relay_read_loop() {
     if (!reference_.is_valid() || !relay_transport_) return;
-    relay_transport_->async_buffers_read(
+    relay_transport_->async_buffers_read_some(
         { network_read_buffer_t { relay_read_buf_.data(), relay_read_buf_.size() } },
         [this, self = shared_from_this()](std::error_code ec, std::size_t bytes_read) {
             if (!reference_.is_valid()) return;
@@ -688,14 +688,15 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                 return;
             }
 
-            // 6-byte punch probe
+            // 6-byte punch probe — accept both when we are actively punching
+            // and when the peer punches us first (before we received flow_p2p_peer)
             if (bytes_read == 6) {
-                if (punch_active_ && !p2p_success_ && !punch_done_) {
-                    std::uint32_t pkt_fid = 0;
-                    std::memcpy(&pkt_fid, p2p_read_buf_.data(), 4);
-                    std::uint16_t peer_lp = 0;
-                    std::memcpy(&peer_lp, p2p_read_buf_.data() + 4, 2);
-                    if (pkt_fid == flow_id_) {
+                std::uint32_t pkt_fid = 0;
+                std::memcpy(&pkt_fid, p2p_read_buf_.data(), 4);
+                std::uint16_t peer_lp = 0;
+                std::memcpy(&peer_lp, p2p_read_buf_.data() + 4, 2);
+                if (pkt_fid == flow_id_) {
+                    if (punch_active_ && !p2p_success_ && !punch_done_) {
                         for (auto& s : punch_sockets_) {
                             if (s) { std::error_code ce; s->close(ce); }
                         }
@@ -705,8 +706,17 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                         punch_done_ = true;
                         FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (full recv) peer_lp={}",
                               flow_id_, peer_lp);
-                        // Notify agent to send p2p_connected to server.
-                        // switch_to_p2p() is called later via on_peer_p2p_connected().
+                        if (on_punch_succeeded_) on_punch_succeeded_(peer_lp);
+                        return;
+                    }
+                    // Peer punched us before we started punching (or after local punch done).
+                    // Accept the punch and reply: set peer endpoint from the received packet
+                    // and trigger punch succeeded so the agent can send p2p_connected.
+                    if (upgrade_started_ && !p2p_success_ && !punch_done_) {
+                        p2p_peer_endpoint_ = p2p_recv_endpoint_;
+                        FINFO("frp_proxy_data_channel flow_id={} udp_punch accepted (peer-initiated) peer_lp={} peer={}:{}",
+                              flow_id_, peer_lp,
+                              p2p_peer_endpoint_.address().to_string(), p2p_peer_endpoint_.port());
                         if (on_punch_succeeded_) on_punch_succeeded_(peer_lp);
                         return;
                     }
