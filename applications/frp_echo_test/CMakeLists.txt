@@ -26,7 +26,6 @@ set_target_properties(${app_target_name} PROPERTIES
 target_link_libraries(${app_target_name}
     PRIVATE
     BuildSettings
-    ${GLOB_NAMESPACE}http
     ${GLOB_NAMESPACE}network
     ${GLOB_NAMESPACE}fundamental
 )
