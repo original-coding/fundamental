@@ -5,14 +5,14 @@
 当前目标是收敛 `src/rpc/proxy/frp/` 的原理原型协议基线，并完成两条本地主线验证：
 
 - `tcp_relay` 原型链路可建立并完成转发
-- `p2p` 原型链路可完成 `udp echo probe -> low_ttl_probe -> KCP -> flow_ready -> 转发`
+- `p2p` 原型链路可完成 `udp echo probe -> udp_punch -> KCP -> flow_ready -> 转发`
 
 当前阶段不是产品化方案，不保留旧协议兼容层，不再使用 Docker 验收，只做本地模拟验证。
 
 ## 2. 统一术语表
 
-- `enable_p2p`
-  节点级运行配置，表示该角色是否允许参与 P2P 流程。
+- `nat_type`
+  节点级运行配置，表示该角色的 NAT 类型，取值为 `disabled` / `symmetric` / `full`。
 - `transport`
   会话建立时选定的正式传输类型，正式取值仅有 `p2p` 与 `tcp_relay`。
 - `udp echo probe`
@@ -21,8 +21,8 @@
   启动期全局 `udp echo probe`，用于判断当前运行时是否具备 P2P 能力。
 - `flow_endpoint_probe`
   单个 `p2p flow` 建立期的 `udp echo probe`，用于获取建联 UDP socket 的外网 `ip:port`。
-- `low_ttl_probe`
-  双方建联 UDP socket 间的低 TTL 直连探测流程。
+- `udp_punch`
+  双方建联 UDP socket 间的直连打洞探测流程，详见 `udp_p2p_flow.md`。
 - `flow`
   建立期控制单元，由 `flow_id` 标识；生命周期止于 `flow terminal result`。
 - `flow terminal result`
@@ -40,11 +40,13 @@
 
 以下词汇不再作为当前原型协议的正式用语：
 
+- `enable_p2p`
 - `supports_p2p`
 - `prefer_p2p`
 - `relay`（作为正式 transport 枚举值）
 - `xtcp`
 - `stcp`
+- `low_ttl_probe`
 
 ## 4. 角色职责
 
@@ -57,7 +59,7 @@
 - 维护 `provider` / `accessor` 的 signal 长连接
 - 处理 `create_flow`
 - 为 `tcp_relay` 配对 `relay_channel`
-- 为 `p2p` 中转 `udp echo probe` 结果与 `low_ttl_probe` 控制消息
+- 为 `p2p` 中转 `udp echo probe` 结果与 `udp_punch` 成功通知
 - 同步发送 `flow terminal result`
 
 约束：
@@ -72,9 +74,9 @@
 
 职责：
 
-- 读取配置并决定是否启用 `enable_p2p`
+- 读取配置并确定自身 `nat_type`
 - 在 startup 阶段完成 `startup_probe`
-- 在 `join.enable_p2p` 中向 `public_server` 投影最终运行时 P2P 可用结论
+- 在 `join.nat_type` 中向 `public_server` 投影最终运行时 NAT 类型
 - 在 `prepare_flow` 后按 `transport` 进入 `tcp_relay` 或 `p2p` 建立期
 - 数据通道建立后连接 backend
 - 发送 `flow_ready` 或 `flow_failed`
@@ -86,11 +88,11 @@
 
 职责：
 
-- 读取配置并决定是否启用 `enable_p2p`
+- 读取配置并确定自身 `nat_type`
 - 在 startup 阶段完成 `startup_probe`
 - 基于本地运行时状态与服务目录选择 `transport`
 - 为每条本地 accepted TCP 连接创建建立期 `flow`
-- 在 `p2p` 路径中驱动 `low_ttl_probe`
+- 在 `p2p` 路径中驱动 `udp_punch`
 - 收到 `flow_ready` 后开始本地业务转发
 - 在会话期负责 accepted TCP 连接侧收尾与本端数据面清理
 
@@ -107,27 +109,32 @@
   - `public_server` 地址信息
   - `traffic_secret`
   - `register_key`
-  - `enable_p2p`
+  - `nat_type`
   - 服务列表：`service_name -> target_host:target_port`
 - `accessor`
   - `public_server` 地址信息
   - `traffic_secret`
   - `register_key`
-  - `enable_p2p`
+  - `nat_type`
   - 监听列表：`service_name -> listen_host:listen_port`
 
 ### 5.2 协议常量
 
 - `udp_echo_probe` 重发间隔：`200ms`
 - `udp_echo_probe` 最大发送次数：`10`
-- `low_ttl_probe` TTL 序列：`2, 3, 4, 5, 6, 7, 128`
-- 每个 TTL 发送次数：`5`
+- `udp_punch` symmetric 侧本地 socket 数：`32`
+- `udp_punch` full 侧第 0 轮扫描端口数：`64`
+- `udp_punch` full 侧后续每轮扫描端口数：`128`
+- `udp_punch` 每包最大重发次数：`5`
+- `udp_punch` 重发间隔：`100ms`
+- `udp_punch` 轮间隔：`1s`
+- `udp_punch` 最大轮次：`32`
 - `p2p` 会话 keepalive 周期：`10s`
 
 ### 5.3 运行时状态
 
 - startup probe 结果：`probe_succeeded` / `probe_failed`
-- provider 对外 `join.enable_p2p`
+- provider 对外 `join.nat_type`
 - 单个 `flow` 的建立期状态
 - `flow_ready` 后的会话期自治对象
 
@@ -136,7 +143,7 @@
 ## 6. 协议常量与部署参数边界
 
 - 协议常量可以先硬编码
-- 地址、端口、`service_name`、密钥、`enable_p2p` 都属于部署参数，必须通过配置提供
+- 地址、端口、`service_name`、密钥、`nat_type` 都属于部署参数，必须通过配置提供
 
 ## 7. 启动期 udp echo probe
 
@@ -153,7 +160,7 @@
 
 ### 7.3 流程
 
-1. 若 `enable_p2p=false`，跳过探测，本次运行视为 relay-only。
+1. 若 `nat_type=disabled`，跳过探测，本次运行视为 relay-only。
 2. 创建一个 UDP socket。
 3. 生成 `probe_uuid`。
 4. 向 server UDP 端口 1 发送 `udp echo probe`，每 `200ms` 重发，最多 `10` 次，直到收到回包。
@@ -174,9 +181,9 @@
 
 `accessor` 是否选择 `transport=p2p`，只由以下条件共同决定：
 
-- accessor 配置 `enable_p2p=true`
+- accessor 配置 `nat_type != disabled`
 - accessor startup probe 成功
-- 服务目录里的 `provider_enable_p2p=true`
+- 服务目录里的 `provider_nat_type != disabled`
 
 否则直接选择 `transport=tcp_relay`。
 
@@ -226,11 +233,11 @@
 3. server 返回 `accepted(flow_id)` 并向 provider 下发 `prepare_flow(flow_id, service_name, p2p)`
 4. provider 与 accessor 各自创建建联 UDP socket
 5. 双方执行 `flow_endpoint_probe`
-6. server 在双方都 `flow_endpoint_ready` 后，分别下发 `flow_p2p_peer(flow_id, peer_ip, peer_port)`
-7. accessor 驱动 `low_ttl_probe`
-8. 任意一方本地 UDP socket 收到对端 5 字节探测包即判成功，并向 server 发送 `p2p_connected(flow_id)`
-9. server 立即向另一侧中转 `peer_p2p_connected(flow_id)`
-10. 双方停止 `low_ttl_probe`，进入成功分支
+6. server 在双方都 `flow_endpoint_ready` 后，分别下发 `flow_p2p_peer(flow_id, peer_ip, peer_port, peer_nat_type)`
+7. 双方执行 `udp_punch`（详见 `udp_p2p_flow.md`）
+8. 任意一方收到对端 6 字节探测包即判成功，向 server 发送 `p2p_connected(flow_id, matched_peer_local_port)`
+9. server 立即向另一侧中转 `peer_p2p_connected(flow_id, matched_peer_local_port)`
+10. 双方停止 `udp_punch`，进入成功分支
 11. accessor 立即启动 1 字节 UDP keepalive，双方切入 KCP 数据面
 12. provider 在 KCP 数据面可用后连接 backend
 13. provider 发送 `flow_ready(flow_id)` 或 `flow_failed(flow_id, reason, message)`
@@ -261,55 +268,29 @@
 - 使用与 startup probe 相同的 `200ms * 10` 重发常量
 - 外网 `ip:port` 通过 signal 中的 `flow_endpoint_ready` 返回
 
-## 13. low_ttl_probe
+## 13. udp_punch
 
-### 13.1 协议常量
+详见 [udp_p2p_flow.md](udp_p2p_flow.md)。
 
-- TTL 序列：`2, 3, 4, 5, 6, 7, 128`
-- 每个 TTL 发送 `5` 次
+协议常量摘要：
 
-### 13.2 角色规则
-
-- accessor 是轮次驱动方
-- provider 被动跟随，并通过 server 中转 `round_done(flow_id, ttl_value)`
-- accessor 收到 provider 的本轮完成消息后，立即发起 `next_round(flow_id, ttl_value)`
-- `public_server` 只中转 low-TTL 控制消息，不驱动轮次，也不判定成功
-- 成功判定只能由 provider/accessor 端点本地作出
-
-### 13.3 成功与失败
-
-唯一成功条件：
-
-- 任意一方建联 UDP socket 收到对端的 5 字节探测包
-
-唯一失败条件：
-
-- 全部 TTL 轮次完成后，双方仍都没有收到对端 5 字节探测包，对应 `low_ttl_timeout`
-
-### 13.4 5 字节探测包格式
-
-- 前 `4` 字节：小端 `flow_id`
-- 后 `1` 字节：实际 `ttl_value`
-
-### 13.5 成功分支本地动作
-
-1. 停止 low-TTL 发送定时器
-2. 停止等待下一轮控制消息
-3. accessor 启动 1 字节 UDP keepalive
-4. 切入 KCP 数据面
-5. provider 继续 backend connect，accessor 继续等待 `flow_ready`
+- `symmetric` 一侧本地 socket 数：`32`（`xxx` + 31 个随机端口，范围 `[xxx-128, xxx+128]`，合法范围 `[1024, 65535]`）
+- `full` 一侧第 0 轮扫描端口数：`64`（`[yyy, yyy+63]` 随机顺序）
+- `full` 一侧后续每轮扫描端口数：`128`，从 `[23, 65535]` 随机选取，不重复
+- 轮间隔：`1s`，计时器驱动，双方独立
+- 最大轮次：`32`
 
 ## 14. UDP 小包协议
 
 只定义两种非 KCP 小包：
 
 - `1` 字节 keepalive
-- `5` 字节 `low_ttl_probe` 探测包
+- `6` 字节 `udp_punch` 探测包
 
 本地 UDP 收包入口严格按以下顺序分流：
 
 1. 长度 `== 1`：当作 keepalive，静默丢弃
-2. 长度 `== 5`：当作 `low_ttl_probe` 包；探测阶段处理，其他阶段静默丢弃
+2. 长度 `== 6`：当作 `udp_punch` 包；探测阶段处理，其他阶段静默丢弃
 3. 长度 `< KCP 头最小长度` 且不属于上面两类：静默丢弃
 4. 其余包：按 KCP 数据包处理
 
@@ -340,14 +321,12 @@
 ### 16.2 endpoint probe
 
 - `flow_endpoint_ready(flow_id, external_ip, external_port)`
-- `flow_p2p_peer(flow_id, peer_ip, peer_port)`
+- `flow_p2p_peer(flow_id, peer_ip, peer_port, peer_nat_type)`
 
-### 16.3 low_ttl_probe 控制
+### 16.3 udp_punch 结果通知
 
-- `round_done(flow_id, ttl_value)`
-- `next_round(flow_id, ttl_value)`
-- `p2p_connected(flow_id)`
-- `peer_p2p_connected(flow_id)`
+- `p2p_connected(flow_id, matched_peer_local_port)`
+- `peer_p2p_connected(flow_id, matched_peer_local_port)`
 
 ### 16.4 flow terminal result
 
@@ -366,7 +345,7 @@
 
 - `relay_channel_open_failed`
 - `flow_endpoint_probe_timeout`
-- `low_ttl_timeout`
+- `punch_timeout`
 - `backend_connect_failed`
 
 `flow_failed.message` 只作为人类可读诊断信息，不参与程序分支逻辑。
@@ -406,7 +385,7 @@
 
 - `waiting_transport_decision`
 - `waiting_flow_endpoint`
-- `waiting_low_ttl_result`（仅 P2P）
+- `waiting_punch_result`（仅 P2P）
 - `waiting_final_result`
 - `established`
 - `closed`
@@ -415,7 +394,7 @@
 
 - `waiting_prepare`
 - `waiting_flow_endpoint`
-- `waiting_low_ttl_result`（仅 P2P）
+- `waiting_punch_result`（仅 P2P）
 - `waiting_backend_connect`
 - `established`
 - `closed`
@@ -443,13 +422,13 @@
 `p2p` 主线应能观测到：
 
 - startup `udp echo probe` 结果日志
-- `low_ttl_probe` 成功日志
+- `udp_punch` 成功日志
 - `p2p` 建立成功日志
 
 ### 20.3 迟到消息
 
 - server 对过期 `flow_id` 的迟到 signal/UDP 包逐条输出 `WARN`
-- 本地 `provider/accessor` 对探测阶段结束后的迟到 5 字节包静默丢弃
+- 本地 `provider/accessor` 对探测阶段结束后的迟到 6 字节包静默丢弃
 - `provider` 对 1 字节 keepalive 静默丢弃，不产生日志
 
 ## 21. 失败与回退规则
@@ -465,7 +444,7 @@
 
 前提：
 
-- 至少一侧 `enable_p2p=false`
+- 至少一侧 `nat_type=disabled`
 
 成功判据：
 
@@ -477,13 +456,13 @@
 
 前提：
 
-- 双方 `enable_p2p=true`
+- 双方 `nat_type != disabled`
 - 双方 startup probe 成功
 
 成功判据：
 
 - 明确观测到 startup `udp echo probe` 结果日志
-- 明确观测到 `low_ttl_probe` 成功日志
+- 明确观测到 `udp_punch` 成功日志
 - 明确观测到 `transport=p2p`
 - 明确观测到建立成功日志
 - 本地 client 经 accessor 访问 backend 成功
