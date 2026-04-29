@@ -322,32 +322,12 @@ frp_runtime_create_flow_response_data frp_runtime_public_server::create_flow(
         flow.accessor_uuid = accessor_session->get_uuid();
 
         const std::uint8_t requested_transport = request.transport;
-        if (requested_transport == frp_runtime_transport_p2p && config_.listen_udp_port == 0) {
-            response.result  = frp_runtime_flow_result_p2p_unavailable;
-            response.message = "server has no UDP ports";
-            return response;
-        }
-        if (requested_transport == frp_runtime_transport_p2p) {
-            const std::uint8_t accessor_nat = accessor_it->second.nat_type;
-            const std::uint8_t provider_nat = provider_it->second.nat_type;
-            const bool accessor_p2p_capable = (accessor_nat != frp_runtime_nat_type_disabled);
-            const bool provider_p2p_capable = (provider_nat != frp_runtime_nat_type_disabled);
-            const bool both_symmetric = (accessor_nat == frp_runtime_nat_type_symmetric &&
-                                         provider_nat == frp_runtime_nat_type_symmetric);
-            if (!accessor_p2p_capable || !provider_p2p_capable || both_symmetric) {
-                response.result  = frp_runtime_flow_result_p2p_unavailable;
-                response.message = "p2p not viable: accessor_nat=" + std::to_string(accessor_nat) +
-                                   " provider_nat=" + std::to_string(provider_nat);
-                return response;
-            }
-        }
-        if (requested_transport != frp_runtime_transport_p2p &&
-            requested_transport != frp_runtime_transport_tcp_relay) {
+        if (requested_transport != frp_runtime_transport_tcp_relay) {
             response.result  = frp_runtime_flow_result_rejected;
-            response.message = "invalid transport";
+            response.message = "invalid transport: only tcp_relay is accepted";
             return response;
         }
-        flow.transport = requested_transport;
+        flow.transport = frp_runtime_transport_tcp_relay;
         flows_by_id_[flow_id] = flow;
 
         response.result        = frp_runtime_flow_result_accepted;
@@ -518,8 +498,8 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
             return false;
         }
         auto& flow = flow_it->second;
-        if (flow.transport != frp_runtime_transport_p2p) {
-            error_message = "flow transport is not p2p";
+        if (!flow.provider_p2p_upgrade_requested || !flow.accessor_p2p_upgrade_requested) {
+            error_message = "p2p upgrade not requested by both sides yet";
             return false;
         }
 
@@ -629,6 +609,82 @@ bool frp_runtime_public_server::handle_p2p_connected(const std::shared_ptr<frp_r
         notify.flow_id = data.flow_id;
         notify.matched_peer_local_port = data.matched_peer_local_port;
         peer_session->send_command(notify);
+    }
+    return true;
+}
+
+bool frp_runtime_public_server::handle_p2p_upgrade_request(
+    const std::shared_ptr<frp_runtime_signal_session>& session,
+    const frp_runtime_p2p_upgrade_request_data& data,
+    std::string& error_message) {
+    if (!session) {
+        error_message = "invalid session";
+        return false;
+    }
+    if (config_.listen_udp_port == 0) {
+        // Server has no UDP — silently ignore, p2p upgrade won't proceed
+        FINFO("handle_p2p_upgrade_request flow_id={} server has no UDP, ignoring", data.flow_id);
+        return true;
+    }
+
+    bool both_requested = false;
+    std::string provider_uuid;
+    std::string accessor_uuid;
+    std::uint8_t provider_nat = frp_runtime_nat_type_disabled;
+    std::uint8_t accessor_nat = frp_runtime_nat_type_disabled;
+    {
+        std::scoped_lock<std::mutex> locker(runtime_mutex_);
+        auto flow_it = flows_by_id_.find(data.flow_id);
+        if (flow_it == flows_by_id_.end()) {
+            error_message = "unknown flow_id";
+            return false;
+        }
+        auto& flow = flow_it->second;
+        const bool is_provider = flow.provider_uuid == session->get_uuid();
+        const bool is_accessor = flow.accessor_uuid == session->get_uuid();
+        if (!is_provider && !is_accessor) {
+            error_message = "p2p_upgrade_request uuid mismatch";
+            return false;
+        }
+        if (is_provider) flow.provider_p2p_upgrade_requested = true;
+        if (is_accessor) flow.accessor_p2p_upgrade_requested = true;
+
+        FINFO("handle_p2p_upgrade_request flow_id={} uuid={} provider_req={} accessor_req={}",
+              data.flow_id, session->get_uuid(),
+              flow.provider_p2p_upgrade_requested, flow.accessor_p2p_upgrade_requested);
+
+        if (!flow.provider_p2p_upgrade_requested || !flow.accessor_p2p_upgrade_requested) {
+            return true; // wait for the other side
+        }
+
+        // Check NAT compatibility
+        auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
+        auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
+        if (provider_it == providers_by_uuid_.end() || accessor_it == accessors_by_uuid_.end()) {
+            return true;
+        }
+        provider_nat = provider_it->second.nat_type;
+        accessor_nat = accessor_it->second.nat_type;
+        const bool accessor_p2p_capable = (accessor_nat != frp_runtime_nat_type_disabled);
+        const bool provider_p2p_capable = (provider_nat != frp_runtime_nat_type_disabled);
+        const bool both_symmetric = (accessor_nat == frp_runtime_nat_type_symmetric &&
+                                     provider_nat == frp_runtime_nat_type_symmetric);
+        if (!accessor_p2p_capable || !provider_p2p_capable || both_symmetric) {
+            FINFO("handle_p2p_upgrade_request flow_id={} p2p not viable accessor_nat={} provider_nat={}",
+                  data.flow_id, static_cast<int>(accessor_nat), static_cast<int>(provider_nat));
+            return true; // silently skip — relay continues
+        }
+        both_requested = true;
+        provider_uuid = flow.provider_uuid;
+        accessor_uuid = flow.accessor_uuid;
+    }
+
+    if (both_requested) {
+        FINFO("handle_p2p_upgrade_request flow_id={} both sides ready, p2p upgrade coordinated", data.flow_id);
+        // Both sides will now send p2p_probe packets to the UDP server.
+        // No explicit notification needed — register_p2p_probe will handle the rest.
+        (void)provider_uuid;
+        (void)accessor_uuid;
     }
     return true;
 }
@@ -1115,6 +1171,15 @@ void frp_runtime_signal_session::handle_authenticated_phase(const frp_runtime_co
         handle_p2p_connected_phase(request);
         return;
     }
+    case frp_runtime_p2p_upgrade_request_command: {
+        frp_runtime_p2p_upgrade_request_data request;
+        if (!Fundamental::io::from_json(payload, request)) {
+            release_obj();
+            return;
+        }
+        handle_p2p_upgrade_request_phase(request);
+        return;
+    }
     default: release_obj(); return;
     }
 }
@@ -1194,8 +1259,8 @@ void frp_runtime_signal_session::handle_fetch_services_phase() {
 }
 
 void frp_runtime_signal_session::handle_create_flow_phase(const frp_runtime_create_flow_request_data& request) {
-    FINFO("signal_session create_flow_request uuid={} service_name={} transport={}",
-          uuid_, request.service_name, request.transport == frp_runtime_transport_p2p ? "p2p" : "tcp_relay");
+    FINFO("signal_session create_flow_request uuid={} service_name={} transport=tcp_relay",
+          uuid_, request.service_name);
     frp_runtime_create_flow_response_data response;
     if (owner_) {
         response = owner_->create_flow(shared_from_this(), request);
@@ -1259,6 +1324,15 @@ void frp_runtime_signal_session::handle_p2p_connected_phase(const frp_runtime_p2
         FERR("p2p_connected rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
         release_obj();
         return;
+    }
+    read_next_command();
+}
+
+void frp_runtime_signal_session::handle_p2p_upgrade_request_phase(const frp_runtime_p2p_upgrade_request_data& request) {
+    std::string error_message;
+    if (!owner_ || !owner_->handle_p2p_upgrade_request(shared_from_this(), request, error_message)) {
+        FERR("p2p_upgrade_request rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
+        // Non-fatal: relay continues, just skip p2p upgrade
     }
     read_next_command();
 }

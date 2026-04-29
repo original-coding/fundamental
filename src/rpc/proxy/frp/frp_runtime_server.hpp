@@ -76,6 +76,9 @@ public:
     bool handle_p2p_connected(const std::shared_ptr<frp_runtime_signal_session>& session,
                               const frp_runtime_p2p_connected_data& data,
                               std::string& error_message);
+    bool handle_p2p_upgrade_request(const std::shared_ptr<frp_runtime_signal_session>& session,
+                                    const frp_runtime_p2p_upgrade_request_data& data,
+                                    std::string& error_message);
     void release_session_state(const frp_runtime_signal_session* session_ptr);
 
     const frp_public_server_config& get_config() const {
@@ -132,6 +135,9 @@ private:
         std::uint8_t transport = frp_runtime_transport_invalid;
         bool provider_ready = false;
         bool transport_ready = false;
+        // p2p upgrade: set when each side sends p2p_upgrade_request
+        bool provider_p2p_upgrade_requested = false;
+        bool accessor_p2p_upgrade_requested = false;
         std::weak_ptr<frp_runtime_signal_session> provider_data_session;
         std::weak_ptr<frp_runtime_signal_session> accessor_data_session;
         p2p_probe_state provider_probe;
@@ -244,6 +250,7 @@ private:
     void handle_flow_data_phase(const frp_runtime_flow_data_data& request);
     void handle_flow_closed_phase(const frp_runtime_flow_closed_data& request);
     void handle_p2p_connected_phase(const frp_runtime_p2p_connected_data& request);
+    void handle_p2p_upgrade_request_phase(const frp_runtime_p2p_upgrade_request_data& request);
     void send_auth_failure_and_close(const std::string& message);
     void close_socket();
     void ssl_handshake();

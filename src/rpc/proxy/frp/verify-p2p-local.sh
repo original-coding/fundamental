@@ -7,16 +7,16 @@ BUILD_DIR="${BUILD_DIR:-${REPO_ROOT}/build-linux}"
 SERVER_BIN="${BUILD_DIR}/applications/frp_proxy_server/frp_proxy_server"
 PROVIDER_BIN="${BUILD_DIR}/applications/frp_proxy_client/frp_proxy_client"
 ACCESSOR_BIN="${BUILD_DIR}/applications/frp_proxy_accessor/frp_proxy_accessor"
-BACKEND_BIN="${BUILD_DIR}/applications/frp_test_http_backend/frp_test_http_backend"
+ECHO_BIN="${BUILD_DIR}/applications/frp_echo_test/frp_echo_test"
 
-for bin in "${SERVER_BIN}" "${PROVIDER_BIN}" "${ACCESSOR_BIN}" "${BACKEND_BIN}"; do
+for bin in "${SERVER_BIN}" "${PROVIDER_BIN}" "${ACCESSOR_BIN}" "${ECHO_BIN}"; do
     if [[ ! -x "${bin}" ]]; then
         echo "missing executable: ${bin}" >&2
         exit 1
     fi
 done
 
-WORK_DIR="$(mktemp -d /tmp/frp-verify-relay-XXXXXX)"
+WORK_DIR="$(mktemp -d /tmp/frp-verify-p2p-XXXXXX)"
 SERVER_TCP_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
 SERVER_UDP_PORT=$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
 BACKEND_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
@@ -36,9 +36,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "${WORK_DIR}/config" "${WORK_DIR}/backend"
-echo "p2p-ok" > "${WORK_DIR}/backend/index.html"
+mkdir -p "${WORK_DIR}/config"
 
+# Server config: p2p enabled (listen_udp_port non-zero)
 cat > "${WORK_DIR}/config/public_server.json" <<EOF
 {
   "threads": 2,
@@ -50,6 +50,7 @@ cat > "${WORK_DIR}/config/public_server.json" <<EOF
 }
 EOF
 
+# Provider config: full-cone NAT (nat_type=2), p2p enabled
 cat > "${WORK_DIR}/config/provider.json" <<EOF
 {
   "threads": 2,
@@ -62,7 +63,7 @@ cat > "${WORK_DIR}/config/provider.json" <<EOF
   "ssl": { "disable_ssl": true },
   "services": [
     {
-      "service_name": "demo-web",
+      "service_name": "demo-echo",
       "target_host": "127.0.0.1",
       "target_port": ${BACKEND_PORT}
     }
@@ -70,6 +71,7 @@ cat > "${WORK_DIR}/config/provider.json" <<EOF
 }
 EOF
 
+# Accessor config: full-cone NAT (nat_type=2), p2p enabled
 cat > "${WORK_DIR}/config/accessor.json" <<EOF
 {
   "threads": 2,
@@ -82,7 +84,7 @@ cat > "${WORK_DIR}/config/accessor.json" <<EOF
   "ssl": { "disable_ssl": true },
   "listeners": [
     {
-      "service_name": "demo-web",
+      "service_name": "demo-echo",
       "listen_host": "127.0.0.1",
       "listen_port": ${ACCESSOR_PORT},
       "nat_type": 2
@@ -92,23 +94,22 @@ cat > "${WORK_DIR}/config/accessor.json" <<EOF
 EOF
 
 echo "========================================"
-echo "  FRP P2P Local Verification"
+echo "  FRP P2P Upgrade Local Verification"
 echo "========================================"
 echo "work dir : ${WORK_DIR}"
-echo "server   : TCP ${SERVER_TCP_PORT}"
+echo "server   : TCP ${SERVER_TCP_PORT}  UDP ${SERVER_UDP_PORT}"
 echo "backend  : ${BACKEND_PORT}"
 echo "accessor : ${ACCESSOR_PORT}"
-echo "udp      : ${SERVER_UDP_PORT}"
 echo ""
 
-# 1. backend
-echo "[1/4] starting backend on ${BACKEND_PORT}..."
-"${BACKEND_BIN}" --port "${BACKEND_PORT}" --root "${WORK_DIR}/backend" >"${WORK_DIR}/backend.log" 2>&1 &
+# 1. echo backend
+echo "[1/4] starting echo backend on ${BACKEND_PORT}..."
+"${ECHO_BIN}" --mode server --port "${BACKEND_PORT}" >"${WORK_DIR}/backend.log" 2>&1 &
 PIDS+=("$!")
 sleep 1
 
 # 2. public_server
-echo "[2/4] starting public_server on TCP ${SERVER_TCP_PORT}..."
+echo "[2/4] starting public_server on TCP ${SERVER_TCP_PORT} UDP ${SERVER_UDP_PORT}..."
 "${SERVER_BIN}" --config "${WORK_DIR}/config/public_server.json" >"${WORK_DIR}/server.log" 2>&1 &
 PIDS+=("$!")
 sleep 1
@@ -123,37 +124,38 @@ sleep 1
 echo "[4/4] starting accessor on ${ACCESSOR_PORT}..."
 "${ACCESSOR_BIN}" --config "${WORK_DIR}/config/accessor.json" >"${WORK_DIR}/accessor.log" 2>&1 &
 PIDS+=("$!")
-sleep 2
+
+# Allow extra time for relay to establish and p2p upgrade to complete
+sleep 5
 
 echo ""
-echo "[test] curling http://127.0.0.1:${ACCESSOR_PORT}/ ..."
+echo "[test] running echo client against accessor ${ACCESSOR_PORT} ..."
 
 for i in $(seq 1 30); do
-    if curl -sS --max-time 2 "http://127.0.0.1:${ACCESSOR_PORT}/" >"${WORK_DIR}/curl.out" 2>/dev/null; then
-        RESPONSE="$(cat "${WORK_DIR}/curl.out")"
-        if [[ "${RESPONSE}" == "p2p-ok" ]]; then
-            echo "✅ PASSED: P2P path works"
-            echo "   response: ${RESPONSE}"
+    if "${ECHO_BIN}" --mode client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
+            --count 5 --delay 100 >"${WORK_DIR}/echo_client.log" 2>&1; then
+        if grep -q "\[TEST PASSED\]" "${WORK_DIR}/echo_client.log"; then
+            echo "✅ PASSED: data path works"
             echo ""
-            # Verify log evidence
-            STARTUP_OK=false
+
+            # Check log evidence for p2p upgrade
             PUNCH_OK=false
-            TRANSPORT_OK=false
-            if grep -q "p2p_probe_result=succeeded" "${WORK_DIR}/provider.log" 2>/dev/null || \
-               grep -q "p2p_probe_result=succeeded" "${WORK_DIR}/accessor.log" 2>/dev/null; then
-                STARTUP_OK=true
-            fi
+            SWITCHED_OK=false
             if grep -q "udp_punch succeeded" "${WORK_DIR}/provider.log" 2>/dev/null || \
                grep -q "udp_punch succeeded" "${WORK_DIR}/accessor.log" 2>/dev/null; then
                 PUNCH_OK=true
             fi
-            if grep -q "transport=p2p" "${WORK_DIR}/provider.log" 2>/dev/null || \
-               grep -q "transport=p2p" "${WORK_DIR}/accessor.log" 2>/dev/null; then
-                TRANSPORT_OK=true
+            if grep -q "switched to p2p" "${WORK_DIR}/provider.log" 2>/dev/null || \
+               grep -q "switched to p2p" "${WORK_DIR}/accessor.log" 2>/dev/null; then
+                SWITCHED_OK=true
             fi
-            echo "   startup_probe evidence : ${STARTUP_OK}"
-            echo "   udp_punch evidence     : ${PUNCH_OK}"
-            echo "   transport=p2p evidence : ${TRANSPORT_OK}"
+            echo "   udp_punch evidence   : ${PUNCH_OK}"
+            echo "   switched_to_p2p      : ${SWITCHED_OK}"
+            if [[ "${PUNCH_OK}" == "true" && "${SWITCHED_OK}" == "true" ]]; then
+                echo "   p2p upgrade          : confirmed"
+            else
+                echo "   p2p upgrade          : not observed (relay-only path used)"
+            fi
             echo ""
             echo "=== tail logs ==="
             echo "--- server.log (last 8 lines) ---"
@@ -168,8 +170,10 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-echo "❌ FAILED: could not get expected response"
+echo "❌ FAILED: echo test did not pass"
 echo ""
+echo "=== echo_client.log ==="
+cat "${WORK_DIR}/echo_client.log"
 echo "=== server.log ==="
 cat "${WORK_DIR}/server.log"
 echo "=== provider.log ==="

@@ -144,11 +144,6 @@ private:
     void connect_signal_channel();
     void schedule_reconnect();
     void process_command(const frp_runtime_command_base& command, std::string payload);
-    void start_flow_endpoint_probe(const std::shared_ptr<provider_flow_runtime>& flow);
-    void start_udp_punch(const std::shared_ptr<provider_flow_runtime>& flow);
-    void start_provider_p2p_read_loop(const std::shared_ptr<provider_flow_runtime>& flow);
-    void schedule_provider_kcp_update(const std::shared_ptr<provider_flow_runtime>& flow);
-    void provider_kcp_send(const std::shared_ptr<provider_flow_runtime>& flow, const char* data, std::size_t size);
     void start_provider_backend_connect(const std::shared_ptr<provider_flow_runtime>& flow);
     void start_backend_read_loop(const std::shared_ptr<provider_flow_runtime>& flow);
     void handle_backend_write_queue(const std::shared_ptr<provider_flow_runtime>& flow);
@@ -184,18 +179,15 @@ private:
         std::string service_name;
         std::string listen_host;
         std::uint16_t listen_port = 0;
-        std::uint8_t nat_type     = frp_runtime_nat_type_full;
         asio::ip::tcp::acceptor acceptor;
 
         listener_runtime(const asio::any_io_executor& executor,
                          std::string service_name,
                          std::string listen_host,
-                         std::uint16_t listen_port,
-                         std::uint8_t nat_type) :
+                         std::uint16_t listen_port) :
         service_name(std::move(service_name)),
         listen_host(std::move(listen_host)),
         listen_port(listen_port),
-        nat_type(nat_type),
         acceptor(executor) {
         }
     };
@@ -206,12 +198,7 @@ private:
     void reconcile_listeners(const std::vector<frp_runtime_visible_service_data>& services);
     void start_accept_loop(const std::shared_ptr<listener_runtime>& listener);
     void process_command(const frp_runtime_command_base& command, std::string payload);
-    void request_flow(const std::shared_ptr<accessor_session_context>& session, bool enable_p2p_request);
-    void start_flow_endpoint_probe(const std::shared_ptr<accessor_session_context>& session);
-    void start_udp_punch(const std::shared_ptr<accessor_session_context>& session);
-    void start_accessor_p2p_read_loop(const std::shared_ptr<accessor_session_context>& session);
-    void schedule_accessor_kcp_update(const std::shared_ptr<accessor_session_context>& session);
-    void accessor_kcp_send(const std::shared_ptr<accessor_session_context>& session, const char* data, std::size_t size);
+    void request_flow(const std::shared_ptr<accessor_session_context>& session);
     void start_local_read_loop(const std::shared_ptr<accessor_session_context>& session);
     void handle_local_write_queue(const std::shared_ptr<accessor_session_context>& session);
     void fail_session(const std::shared_ptr<accessor_session_context>& session, const std::string& reason);
