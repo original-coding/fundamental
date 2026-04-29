@@ -10,6 +10,35 @@
 namespace network::proxy
 {
 
+std::vector<std::uint8_t> frp_derive_traffic_key(const std::string& traffic_secret) {
+    std::vector<std::uint8_t> key(FRP_UDP_KEY_SIZE);
+
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
+    if (!pctx) return {};
+    if (EVP_PKEY_derive_init(pctx) <= 0) { EVP_PKEY_CTX_free(pctx); return {}; }
+    if (EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256()) <= 0) { EVP_PKEY_CTX_free(pctx); return {}; }
+
+    const char* salt = "frp-udp-v1";
+    if (EVP_PKEY_CTX_set1_hkdf_salt(pctx,
+            reinterpret_cast<const unsigned char*>(salt), std::strlen(salt)) <= 0) {
+        EVP_PKEY_CTX_free(pctx); return {};
+    }
+    if (EVP_PKEY_CTX_set1_hkdf_key(pctx,
+            reinterpret_cast<const unsigned char*>(traffic_secret.data()),
+            traffic_secret.size()) <= 0) {
+        EVP_PKEY_CTX_free(pctx); return {};
+    }
+    const char* info = "frp-traffic";
+    if (EVP_PKEY_CTX_add1_hkdf_info(pctx,
+            reinterpret_cast<const unsigned char*>(info), std::strlen(info)) <= 0) {
+        EVP_PKEY_CTX_free(pctx); return {};
+    }
+    std::size_t keylen = key.size();
+    if (EVP_PKEY_derive(pctx, key.data(), &keylen) <= 0) { EVP_PKEY_CTX_free(pctx); return {}; }
+    EVP_PKEY_CTX_free(pctx);
+    return key;
+}
+
 std::vector<std::uint8_t> frp_derive_udp_flow_key(
     const std::string& traffic_secret,
     std::uint32_t flow_id,

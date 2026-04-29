@@ -1,5 +1,6 @@
 #pragma once
 
+#include "frp_runtime_command.hpp"
 #include "fundamental/basic/filesystem_utils.hpp"
 #include "fundamental/basic/log.h"
 #include "fundamental/rttr_handler/deserializer.h"
@@ -47,7 +48,7 @@ struct frp_accessor_listener_config {
     std::string service_name;
     std::string listen_host;
     std::uint16_t listen_port = 0;
-    bool enable_p2p           = true;
+    std::uint8_t nat_type     = frp_runtime_nat_type_full;
     virtual ~frp_accessor_listener_config() = default;
     RTTR_ENABLE()
 };
@@ -70,7 +71,7 @@ struct frp_provider_config {
     std::uint16_t public_server_udp_port = 0; // base UDP port; client probes port and port+1; 0 = no p2p
     std::string traffic_secret;
     std::string register_key;
-    bool enable_p2p = true;
+    std::uint8_t nat_type = frp_runtime_nat_type_full;
     std::string local_ip; // LAN IP for same-network p2p; empty = skip local candidate
     frp_tls_client_config_file ssl;
     std::vector<frp_provider_service_config> services;
@@ -85,7 +86,7 @@ struct frp_accessor_config {
     std::uint16_t public_server_udp_port = 0; // base UDP port; client probes port and port+1; 0 = no p2p
     std::string traffic_secret;
     std::string register_key;
-    bool enable_p2p = false;
+    std::uint8_t nat_type = frp_runtime_nat_type_disabled;
     std::string local_ip; // LAN IP for same-network p2p; empty = skip local candidate
     frp_tls_client_config_file ssl;
     std::vector<frp_accessor_listener_config> listeners;
@@ -155,7 +156,7 @@ inline frp_provider_config make_example_provider_config() {
     config.public_server_udp_port = 32001;
     config.traffic_secret         = "traffic-secret-demo";
     config.register_key           = "demo-register-key";
-    config.enable_p2p           = true;
+    config.nat_type               = frp_runtime_nat_type_full;
     config.local_ip             = "192.168.1.100";
     config.ssl.disable_ssl        = true;
     frp_provider_service_config service;
@@ -173,14 +174,14 @@ inline frp_accessor_config make_example_accessor_config() {
     config.public_server_udp_port = 32001;
     config.traffic_secret         = "traffic-secret-demo";
     config.register_key           = "demo-register-key";
-    config.enable_p2p             = true;
+    config.nat_type               = frp_runtime_nat_type_full;
     config.local_ip               = "192.168.1.100";
     config.ssl.disable_ssl        = true;
     frp_accessor_listener_config listener;
     listener.service_name = "demo-web";
     listener.listen_host  = "127.0.0.1";
     listener.listen_port  = 28080;
-    listener.enable_p2p   = true;
+    listener.nat_type   = frp_runtime_nat_type_full;
     config.listeners.push_back(std::move(listener));
     return config;
 }
@@ -332,7 +333,7 @@ inline void __register_frp_config_reflect_type__() {
         .property("service_name", &frp_accessor_listener_config::service_name)
         .property("listen_host", &frp_accessor_listener_config::listen_host)
         .property("listen_port", &frp_accessor_listener_config::listen_port)
-        .property("enable_p2p", &frp_accessor_listener_config::enable_p2p);
+        .property("nat_type", &frp_accessor_listener_config::nat_type);
 
     rttr::registration::class_<frp_public_server_config>("network::proxy::frp_public_server_config")
         .constructor()(rttr::policy::ctor::as_object)
@@ -351,7 +352,7 @@ inline void __register_frp_config_reflect_type__() {
         .property("public_server_udp_port", &frp_provider_config::public_server_udp_port)
         .property("traffic_secret", &frp_provider_config::traffic_secret)
         .property("register_key", &frp_provider_config::register_key)
-        .property("enable_p2p", &frp_provider_config::enable_p2p)
+        .property("nat_type", &frp_provider_config::nat_type)
         .property("local_ip", &frp_provider_config::local_ip)
         .property("ssl", &frp_provider_config::ssl)
         .property("services", &frp_provider_config::services);
@@ -364,7 +365,7 @@ inline void __register_frp_config_reflect_type__() {
         .property("public_server_udp_port", &frp_accessor_config::public_server_udp_port)
         .property("traffic_secret", &frp_accessor_config::traffic_secret)
         .property("register_key", &frp_accessor_config::register_key)
-        .property("enable_p2p", &frp_accessor_config::enable_p2p)
+        .property("nat_type", &frp_accessor_config::nat_type)
         .property("local_ip", &frp_accessor_config::local_ip)
         .property("ssl", &frp_accessor_config::ssl)
         .property("listeners", &frp_accessor_config::listeners);

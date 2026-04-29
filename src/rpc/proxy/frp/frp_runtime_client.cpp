@@ -5,6 +5,10 @@
 #include "fundamental/basic/base64_utils.hpp"
 #include "network/rudp/kcp_imp/ikcp.h"
 
+#include <algorithm>
+#include <random>
+#include <set>
+
 namespace network::proxy
 {
 
@@ -100,7 +104,16 @@ void reset_runtime_p2p_state(FlowT& flow) {
     flow.p2p_timer.cancel();
     flow.kcp_update_timer.cancel();
     flow.endpoint_probe_timer.cancel();
+    flow.punch_timer.cancel();
     flow.kcp.reset();
+    for (auto& sock : flow.punch_sockets) {
+        if (sock) {
+            std::error_code ec;
+            sock->close(ec);
+        }
+    }
+    flow.punch_sockets.clear();
+    flow.punch_active = false;
     if (flow.p2p_socket) {
         std::error_code ec;
         flow.p2p_socket->close(ec);
@@ -124,6 +137,7 @@ struct frp_runtime_provider_agent::provider_flow_runtime {
     frp_runtime_udp_send_context p2p_send_context;
     asio::steady_timer p2p_timer;
     asio::steady_timer endpoint_probe_timer;
+    asio::steady_timer punch_timer;
     asio::ip::tcp::socket backend_socket;
     asio::ip::tcp::resolver resolver;
     std::array<char, 16 * 1024> read_buf {};
@@ -131,9 +145,14 @@ struct frp_runtime_provider_agent::provider_flow_runtime {
     std::deque<std::string> pending_writes;
     std::vector<std::uint8_t> udp_send_key;
     std::vector<std::uint8_t> udp_recv_key;
+    // punch state
+    std::vector<std::unique_ptr<asio::ip::udp::socket>> punch_sockets; // symmetric: 32 sockets; full: 1 socket
+    std::uint8_t peer_nat_type = frp_runtime_nat_type_disabled;
+    int punch_round = 0;
+    std::set<std::uint16_t> punch_scanned_ports; // full side: already-scanned ports
     std::size_t endpoint_probe_attempts = 0;
     bool awaiting_endpoint_ready = false;
-    bool low_ttl_probe_active = false;
+    bool punch_active = false;
     bool p2p_success = false;
     bool writing = false;
     bool transport_ready = false;
@@ -143,7 +162,7 @@ struct frp_runtime_provider_agent::provider_flow_runtime {
 
     explicit provider_flow_runtime(const asio::any_io_executor& executor) :
     kcp_update_timer(executor), p2p_timer(executor), endpoint_probe_timer(executor),
-    backend_socket(executor), resolver(executor) {
+    punch_timer(executor), backend_socket(executor), resolver(executor) {
     }
 };
 
@@ -151,7 +170,7 @@ struct frp_runtime_accessor_agent::accessor_session_context {
     std::uint64_t session_id = 0;
     std::uint32_t flow_id = 0;
     std::string service_name;
-    bool enable_p2p = true;
+    std::uint8_t nat_type = frp_runtime_nat_type_full;
     bool awaiting_p2p = false;
     bool relay_retry_used = false;
     asio::ip::tcp::socket local_socket;
@@ -164,16 +183,20 @@ struct frp_runtime_accessor_agent::accessor_session_context {
     frp_runtime_udp_send_context p2p_send_context;
     asio::steady_timer p2p_timer;
     asio::steady_timer endpoint_probe_timer;
-    asio::steady_timer low_ttl_timer;
+    asio::steady_timer punch_timer;
     std::array<char, 16 * 1024> read_buf {};
     std::array<char, 16 * 1024> p2p_read_buf {};
     std::deque<std::string> pending_writes;
     std::vector<std::uint8_t> udp_send_key;
     std::vector<std::uint8_t> udp_recv_key;
+    // punch state
+    std::vector<std::unique_ptr<asio::ip::udp::socket>> punch_sockets;
+    std::uint8_t peer_nat_type = frp_runtime_nat_type_disabled;
+    int punch_round = 0;
+    std::set<std::uint16_t> punch_scanned_ports;
     std::size_t endpoint_probe_attempts = 0;
-    std::size_t low_ttl_round_index = 0;
     bool awaiting_endpoint_ready = false;
-    bool low_ttl_probe_active = false;
+    bool punch_active = false;
     bool p2p_success = false;
     bool writing = false;
     bool ready = false;
@@ -186,7 +209,7 @@ struct frp_runtime_accessor_agent::accessor_session_context {
     kcp_update_timer(local_socket.get_executor()),
     p2p_timer(local_socket.get_executor()),
     endpoint_probe_timer(local_socket.get_executor()),
-    low_ttl_timer(local_socket.get_executor()) {
+    punch_timer(local_socket.get_executor()) {
     }
 };
 
@@ -437,10 +460,14 @@ void frp_runtime_data_client_channel::notify_disconnect_once() {
     if (on_disconnected_) on_disconnected_();
 }
 
-static constexpr std::uint8_t kLowTtlSequence[] = {2, 3, 4, 5, 6, 7, 128};
-static constexpr std::size_t kLowTtlSequenceLen  = 7;
-static constexpr int kLowTtlPacketsPerRound       = 5;
 static constexpr std::size_t kMaxEndpointProbeAttempts = 10;
+static constexpr int kPunchMaxRounds       = 32;
+static constexpr int kPunchSocketCount     = 32;   // symmetric side: local sockets
+static constexpr int kPunchScanRound0      = 64;   // full side: round-0 port count
+static constexpr int kPunchScanPerRound    = 128;  // full side: rounds 1+ port count
+static constexpr int kPunchRetransmitCount = 5;
+static constexpr int kPunchRetransmitMs    = 100;
+static constexpr int kPunchRoundMs         = 1000;
 
 void run_startup_probe(const asio::any_io_executor& executor,
                        const std::string& traffic_secret,
@@ -478,8 +505,8 @@ void run_startup_probe(const asio::any_io_executor& executor,
     state->public_server_host = public_server_host;
     state->udp_ports = udp_ports;
     state->traffic_secret = traffic_secret;
-    state->send_key = frp_derive_udp_flow_key(traffic_secret, 0, true);
-    state->recv_key = frp_derive_udp_flow_key(traffic_secret, 0, false);
+    state->send_key = frp_derive_traffic_key(traffic_secret);
+    state->recv_key = frp_derive_traffic_key(traffic_secret);
 
     std::error_code ec;
     state->socket->open(asio::ip::udp::v4(), ec);
@@ -605,7 +632,7 @@ reconnect_timer_(io_context_pool::Instance().get_io_context()) {
 }
 
 void frp_runtime_provider_agent::start() {
-    if (config_.enable_p2p && config_.public_server_udp_port != 0) {
+    if (config_.nat_type != frp_runtime_nat_type_disabled && config_.public_server_udp_port != 0) {
         run_startup_probe(reconnect_timer_.get_executor(), config_.traffic_secret, config_.public_server_host,
                           { config_.public_server_udp_port,
                             static_cast<std::uint16_t>(config_.public_server_udp_port + 1) },
@@ -668,6 +695,220 @@ void frp_runtime_provider_agent::schedule_reconnect() {
     });
 }
 
+void frp_runtime_provider_agent::start_udp_punch(const std::shared_ptr<provider_flow_runtime>& flow) {
+    if (!flow || !channel_ || flow->closed || flow->p2p_success) return;
+
+    const bool i_am_symmetric = (config_.nat_type == frp_runtime_nat_type_symmetric);
+
+    std::mt19937 rng(std::random_device{}());
+
+    if (i_am_symmetric) {
+        // --- symmetric side: bind 32 sockets near local port xxx ---
+        std::error_code ec;
+        std::uint16_t xxx = flow->p2p_socket ? flow->p2p_socket->local_endpoint(ec).port() : 0;
+        if (ec || xxx == 0) xxx = 40000;
+        flow->punch_sockets.clear();
+        std::set<std::uint16_t> used;
+        {
+            auto sock = std::make_unique<asio::ip::udp::socket>(reconnect_timer_.get_executor());
+            if (!protocal_helper::udp_bind_endpoint(*sock, xxx)) {
+                flow->punch_sockets.push_back(std::move(sock));
+                used.insert(xxx);
+            }
+        }
+        std::uniform_int_distribution<int> dist(
+            std::max(1024, static_cast<int>(xxx) - 128),
+            std::min(65535, static_cast<int>(xxx) + 128));
+        int attempts = 0;
+        while (static_cast<int>(flow->punch_sockets.size()) < kPunchSocketCount && attempts < 2000) {
+            attempts++;
+            auto port = static_cast<std::uint16_t>(dist(rng));
+            if (used.count(port)) continue;
+            auto sock = std::make_unique<asio::ip::udp::socket>(reconnect_timer_.get_executor());
+            if (protocal_helper::udp_bind_endpoint(*sock, port)) continue;
+            used.insert(port);
+            flow->punch_sockets.push_back(std::move(sock));
+        }
+        FINFO("udp_punch symmetric provider flow_id={} sockets={} target={}:{}",
+              flow->flow_id, flow->punch_sockets.size(),
+              flow->p2p_peer_endpoint.address().to_string(), flow->p2p_peer_endpoint.port());
+    } else {
+        // --- full side: 1 socket (p2p_socket), scan peer's port range ---
+        if (!flow->p2p_socket) {
+            FERR("udp_punch full provider flow_id={} no p2p_socket", flow->flow_id);
+            return;
+        }
+        flow->punch_sockets.clear();
+    }
+
+    flow->punch_active = true;
+    flow->punch_round  = 0;
+
+    auto do_round = std::make_shared<std::function<void()>>();
+    *do_round = [this, self = shared_from_this(), flow, do_round, i_am_symmetric]() mutable {
+        if (!reference_.is_valid() || flow->closed || !flow->punch_active || flow->p2p_success) return;
+
+        const int max_rounds = kPunchMaxRounds + (i_am_symmetric ? 0 : 1);
+        if (flow->punch_round >= max_rounds) {
+            frp_runtime_flow_failed_data failed;
+            failed.command = frp_runtime_flow_failed_command;
+            failed.flow_id = flow->flow_id;
+            failed.reason  = frp_runtime_flow_failed_punch_timeout;
+            failed.message = "udp_punch all rounds exhausted";
+            flow->closed   = true;
+            reset_runtime_p2p_state(*flow);
+            flows_.erase(flow->flow_id);
+            if (channel_) channel_->send_command(failed);
+            return;
+        }
+
+        std::vector<asio::ip::udp::endpoint> targets;
+        if (i_am_symmetric) {
+            targets.push_back(flow->p2p_peer_endpoint);
+        } else {
+            std::mt19937 rng2(std::random_device{}());
+            const std::uint16_t peer_base = flow->p2p_peer_endpoint.port();
+            const auto peer_addr = flow->p2p_peer_endpoint.address();
+            if (flow->punch_round == 0) {
+                std::vector<std::uint16_t> ports;
+                for (int i = 0; i < kPunchScanRound0; ++i) {
+                    std::uint16_t p = static_cast<std::uint16_t>(peer_base + i);
+                    if (p < 23) continue;
+                    ports.push_back(p);
+                    flow->punch_scanned_ports.insert(p);
+                }
+                std::shuffle(ports.begin(), ports.end(), rng2);
+                for (auto p : ports) targets.emplace_back(peer_addr, p);
+            } else {
+                std::uniform_int_distribution<int> dist2(23, 65535);
+                int picked = 0, tries = 0;
+                while (picked < kPunchScanPerRound && tries < 100000) {
+                    tries++;
+                    auto p = static_cast<std::uint16_t>(dist2(rng2));
+                    if (flow->punch_scanned_ports.count(p)) continue;
+                    flow->punch_scanned_ports.insert(p);
+                    targets.emplace_back(peer_addr, p);
+                    picked++;
+                }
+            }
+        }
+
+        auto retransmit_index = std::make_shared<int>(0);
+        auto do_retransmit = std::make_shared<std::function<void()>>();
+        *do_retransmit = [this, self, flow, do_round, do_retransmit, retransmit_index,
+                          targets = std::move(targets), i_am_symmetric]() mutable {
+            if (!reference_.is_valid() || flow->closed || !flow->punch_active || flow->p2p_success) return;
+            if (*retransmit_index >= kPunchRetransmitCount) {
+                flow->punch_round++;
+                flow->punch_timer.expires_after(std::chrono::milliseconds(kPunchRoundMs));
+                flow->punch_timer.async_wait([do_round](const std::error_code& ec) mutable {
+                    if (ec) return;
+                    (*do_round)();
+                });
+                return;
+            }
+            (*retransmit_index)++;
+
+            std::uint32_t fid = flow->flow_id;
+            if (i_am_symmetric) {
+                for (auto& sock : flow->punch_sockets) {
+                    if (!sock) continue;
+                    std::error_code ec;
+                    std::uint16_t local_port = sock->local_endpoint(ec).port();
+                    if (ec) continue;
+                    auto pkt = std::make_shared<std::array<std::uint8_t, 6>>();
+                    std::memcpy(pkt->data(), &fid, 4);
+                    std::memcpy(pkt->data() + 4, &local_port, 2);
+                    sock->async_send_to(asio::buffer(*pkt), targets[0],
+                                        [pkt](const std::error_code&, std::size_t) {});
+                }
+            } else {
+                std::uint16_t local_port = 0;
+                {
+                    std::error_code ec;
+                    local_port = flow->p2p_socket->local_endpoint(ec).port();
+                }
+                for (const auto& tgt : targets) {
+                    auto pkt = std::make_shared<std::array<std::uint8_t, 6>>();
+                    std::memcpy(pkt->data(), &fid, 4);
+                    std::memcpy(pkt->data() + 4, &local_port, 2);
+                    flow->p2p_socket->async_send_to(asio::buffer(*pkt), tgt,
+                                                    [pkt](const std::error_code&, std::size_t) {});
+                }
+            }
+
+            flow->punch_timer.expires_after(std::chrono::milliseconds(kPunchRetransmitMs));
+            flow->punch_timer.async_wait([do_retransmit](const std::error_code& ec) mutable {
+                if (ec) return;
+                (*do_retransmit)();
+            });
+        };
+        (*do_retransmit)();
+    };
+
+    // For symmetric side, start read loops on punch_sockets
+    if (i_am_symmetric) {
+        for (auto& sock : flow->punch_sockets) {
+            if (!sock) continue;
+            auto punch_sock_ptr = sock.get();
+            auto recv_buf = std::make_shared<std::array<char, 64>>();
+            auto recv_ep  = std::make_shared<asio::ip::udp::endpoint>();
+            std::function<void()> do_recv;
+            do_recv = [this, self = shared_from_this(), flow, punch_sock_ptr, recv_buf, recv_ep, do_recv]() mutable {
+                if (!reference_.is_valid() || flow->closed || !flow->punch_active || flow->p2p_success) return;
+                punch_sock_ptr->async_receive_from(
+                    asio::buffer(recv_buf->data(), recv_buf->size()), *recv_ep,
+                    [this, self, flow, punch_sock_ptr, recv_buf, recv_ep, do_recv]
+                    (const std::error_code& ec, std::size_t bytes) mutable {
+                        if (!reference_.is_valid() || flow->closed) return;
+                        if (!ec && bytes == 6 && flow->punch_active && !flow->p2p_success) {
+                            std::uint32_t pkt_fid = 0;
+                            std::memcpy(&pkt_fid, recv_buf->data(), 4);
+                            std::uint16_t peer_lp = 0;
+                            std::memcpy(&peer_lp, recv_buf->data() + 4, 2);
+                            if (pkt_fid == flow->flow_id) {
+                                for (auto& s : flow->punch_sockets) {
+                                    if (s.get() == punch_sock_ptr) {
+                                        flow->p2p_socket = std::move(s);
+                                        break;
+                                    }
+                                }
+                                for (auto& s : flow->punch_sockets) {
+                                    if (s) { std::error_code ce; s->close(ce); }
+                                }
+                                flow->punch_sockets.clear();
+                                flow->punch_active = false;
+                                flow->punch_timer.cancel();
+                                flow->p2p_success = true;
+                                flow->transport_ready = true;
+                                flow->p2p_send_context.socket        = &flow->p2p_socket;
+                                flow->p2p_send_context.peer_endpoint = &flow->p2p_peer_endpoint;
+                                flow->p2p_peer_endpoint = *recv_ep;
+                                std::error_code ep_ec;
+                                log_provider_channel_established(
+                                    flow->flow_id, flow->service_name, "p2p",
+                                    format_runtime_endpoint(flow->p2p_socket->local_endpoint(ep_ec)),
+                                    format_runtime_endpoint(flow->p2p_peer_endpoint));
+                                FINFO("udp_punch succeeded (symmetric recv) flow_id={} peer_local_port={}", flow->flow_id, peer_lp);
+                                start_provider_p2p_read_loop(flow);
+                                frp_runtime_p2p_connected_data connected;
+                                connected.command = frp_runtime_p2p_connected_command;
+                                connected.flow_id = flow->flow_id;
+                                connected.matched_peer_local_port = peer_lp;
+                                if (channel_) channel_->send_command(connected);
+                                return;
+                            }
+                        }
+                        if (!flow->closed && flow->punch_active && !flow->p2p_success) do_recv();
+                    });
+            };
+            do_recv();
+        }
+    }
+
+    (*do_round)();
+}
+
 void frp_runtime_provider_agent::provider_kcp_send(const std::shared_ptr<provider_flow_runtime>& flow,
                                                    const char* data,
                                                    std::size_t size) {
@@ -726,26 +967,36 @@ void frp_runtime_provider_agent::start_provider_p2p_read_loop(const std::shared_
                 return;
             }
 
-            // 5-byte: low_ttl_probe packet
-            if (bytes_read == 5) {
-                if (flow->low_ttl_probe_active && !flow->p2p_success) {
+            // 6-byte: udp_punch probe packet
+            if (bytes_read == 6) {
+                if (flow->punch_active && !flow->p2p_success) {
                     std::uint32_t pkt_flow_id = 0;
                     std::memcpy(&pkt_flow_id, flow->p2p_read_buf.data(), 4);
-                    FINFO("provider p2p recv low_ttl probe flow_id={} pkt_flow_id={} ttl={}", flow->flow_id, pkt_flow_id,
-                          static_cast<int>(flow->p2p_read_buf[4]));
+                    std::uint16_t peer_local_port = 0;
+                    std::memcpy(&peer_local_port, flow->p2p_read_buf.data() + 4, 2);
+                    FINFO("provider p2p recv punch probe flow_id={} pkt_flow_id={} peer_local_port={}", flow->flow_id, pkt_flow_id, peer_local_port);
                     if (pkt_flow_id == flow->flow_id) {
                         flow->p2p_success = true;
-                        flow->low_ttl_probe_active = false;
+                        flow->punch_active = false;
+                        flow->punch_timer.cancel();
                         flow->transport_ready = true;
+                        // Promote the socket that received this packet
+                        // (p2p_socket is already the receiving socket for provider)
+                        // Close all punch sockets except p2p_socket
+                        for (auto& sock : flow->punch_sockets) {
+                            if (sock) { std::error_code ec; sock->close(ec); }
+                        }
+                        flow->punch_sockets.clear();
                         std::error_code ep_ec;
                         log_provider_channel_established(
                             flow->flow_id, flow->service_name, "p2p",
                             format_runtime_endpoint(flow->p2p_socket->local_endpoint(ep_ec)),
                             format_runtime_endpoint(flow->p2p_peer_endpoint));
-                        FINFO("low_ttl_probe succeeded flow_id={}", flow->flow_id);
+                        FINFO("udp_punch succeeded flow_id={} peer_local_port={}", flow->flow_id, peer_local_port);
                         frp_runtime_p2p_connected_data connected;
                         connected.command = frp_runtime_p2p_connected_command;
                         connected.flow_id = flow->flow_id;
+                        connected.matched_peer_local_port = peer_local_port;
                         if (channel_) channel_->send_command(connected);
                     }
                 }
@@ -868,7 +1119,9 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         join.role         = frp_runtime_provider_role;
         join.uuid         = uuid_;
         join.register_key = config_.register_key;
-        join.enable_p2p = config_.enable_p2p && startup_probe_succeeded_;
+        join.nat_type = (config_.nat_type != frp_runtime_nat_type_disabled && startup_probe_succeeded_)
+                            ? config_.nat_type
+                            : frp_runtime_nat_type_disabled;
         channel_->send_command(join);
         return;
     }
@@ -1066,28 +1319,13 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             channel_->send_command(failed);
             return;
         }
-        flow->low_ttl_probe_active = true;
-        FINFO("provider flow {} flow_p2p_peer peer={}:{} low_ttl_probe_active=true", flow->flow_id, peer.peer_host, peer.peer_port);
+        flow->peer_nat_type = peer.peer_nat_type;
+        FINFO("provider flow {} flow_p2p_peer peer={}:{} peer_nat_type={} starting udp_punch",
+              flow->flow_id, peer.peer_host, peer.peer_port, static_cast<int>(peer.peer_nat_type));
+        start_udp_punch(flow);
         if (!flow->backend_connected) {
             start_provider_backend_connect(flow);
         }
-        return;
-    }
-    case frp_runtime_round_done_command: {
-        frp_runtime_round_done_data done;
-        if (!Fundamental::io::from_json(payload, done)) {
-            channel_->release_obj();
-            return;
-        }
-        auto it = flows_.find(done.flow_id);
-        if (it == flows_.end()) return;
-        auto flow = it->second;
-        if (!flow->low_ttl_probe_active || flow->p2p_success) return;
-        frp_runtime_next_round_data next;
-        next.command   = frp_runtime_next_round_command;
-        next.flow_id   = done.flow_id;
-        next.ttl_value = done.ttl_value;
-        channel_->send_command(next);
         return;
     }
     case frp_runtime_peer_p2p_connected_command: {
@@ -1099,9 +1337,34 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         auto it = flows_.find(connected.flow_id);
         if (it == flows_.end()) return;
         auto flow = it->second;
+        if (flow->p2p_success) return;
+        // Find the punch socket matching matched_peer_local_port and promote it to p2p_socket
+        if (connected.matched_peer_local_port != 0 && !flow->punch_sockets.empty()) {
+            for (auto& sock : flow->punch_sockets) {
+                if (!sock) continue;
+                std::error_code ec;
+                auto lp = sock->local_endpoint(ec).port();
+                if (!ec && lp == connected.matched_peer_local_port) {
+                    flow->p2p_socket = std::move(sock);
+                    break;
+                }
+            }
+        }
+        // Close remaining punch sockets
+        for (auto& sock : flow->punch_sockets) {
+            if (sock) { std::error_code ec; sock->close(ec); }
+        }
+        flow->punch_sockets.clear();
+        flow->punch_active = false;
+        flow->punch_timer.cancel();
         flow->p2p_success = true;
-        flow->low_ttl_probe_active = false;
-        FINFO("provider flow {} peer_p2p_connected p2p_success=true", flow->flow_id);
+        flow->transport_ready = true;
+        if (flow->p2p_socket) {
+            flow->p2p_send_context.socket        = &flow->p2p_socket;
+            flow->p2p_send_context.peer_endpoint = &flow->p2p_peer_endpoint;
+            start_provider_p2p_read_loop(flow);
+        }
+        FINFO("provider flow {} peer_p2p_connected p2p_success=true matched_port={}", flow->flow_id, connected.matched_peer_local_port);
         return;
     }
     case frp_runtime_flow_data_command: {
@@ -1166,9 +1429,9 @@ void frp_runtime_provider_agent::start_flow_endpoint_probe(const std::shared_ptr
         return;
     }
 
-    // Derive UDP encryption keys for this flow (provider is receiver, accessor is sender)
-    flow->udp_send_key = frp_derive_udp_flow_key(config_.traffic_secret, flow->flow_id, false);
-    flow->udp_recv_key = frp_derive_udp_flow_key(config_.traffic_secret, flow->flow_id, true);
+    // Derive UDP encryption key for this flow (shared traffic key)
+    flow->udp_send_key = frp_derive_traffic_key(config_.traffic_secret);
+    flow->udp_recv_key = frp_derive_traffic_key(config_.traffic_secret);
     if (flow->udp_send_key.empty() || flow->udp_recv_key.empty()) {
         frp_runtime_flow_failed_data failed;
         failed.command = frp_runtime_flow_failed_command;
@@ -1332,7 +1595,7 @@ reconnect_timer_(io_context_pool::Instance().get_io_context()) {
 }
 
 void frp_runtime_accessor_agent::start() {
-    if (config_.enable_p2p && config_.public_server_udp_port != 0) {
+    if (config_.nat_type != frp_runtime_nat_type_disabled && config_.public_server_udp_port != 0) {
         run_startup_probe(reconnect_timer_.get_executor(), config_.traffic_secret, config_.public_server_host,
                           { config_.public_server_udp_port,
                             static_cast<std::uint16_t>(config_.public_server_udp_port + 1) },
@@ -1438,7 +1701,7 @@ void frp_runtime_accessor_agent::reconcile_listeners(const std::vector<frp_runti
 
         auto listener = std::make_shared<listener_runtime>(reconnect_timer_.get_executor(), listener_config.service_name,
                                                            listener_config.listen_host, listener_config.listen_port,
-                                                           listener_config.enable_p2p);
+                                                           listener_config.nat_type);
         std::error_code ec;
         auto address = asio::ip::make_address(listener_config.listen_host, ec);
         if (ec) {
@@ -1467,13 +1730,13 @@ void frp_runtime_accessor_agent::reconcile_listeners(const std::vector<frp_runti
             listener->acceptor.close(ec);
             continue;
         }
-        FWARN("accessor listener active service_name={} endpoint={}:{} enable_p2p={} provider_uuid={} provider_enable_p2p={} flow_runtime_pending=true",
+        FWARN("accessor listener active service_name={} endpoint={}:{} nat_type={} provider_uuid={} provider_nat_type={} flow_runtime_pending=true",
               listener->service_name,
               listener->listen_host,
               listener->listen_port,
-              listener->enable_p2p,
+              static_cast<int>(listener->nat_type),
               service_it->second.provider_uuid,
-              service_it->second.provider_enable_p2p);
+              static_cast<int>(service_it->second.provider_nat_type));
         start_accept_loop(listener);
         listeners_[key] = std::move(listener);
     }
@@ -1502,11 +1765,9 @@ void frp_runtime_accessor_agent::start_accept_loop(const std::shared_ptr<listene
                 } else {
                     auto session = std::make_shared<accessor_session_context>(next_session_id_++, std::move(socket));
                     session->service_name = listener->service_name;
-                    session->enable_p2p   = listener->enable_p2p;
+                    session->nat_type     = listener->nat_type;
                     pending_sessions_[session->session_id] = session;
-                    // Use p2p only if listener wants it, startup probe succeeded, and provider supports it
-                    // (provider_enable_p2p is checked at reconcile time; here we use listener->enable_p2p as proxy)
-                    bool use_p2p = listener->enable_p2p && startup_probe_succeeded_;
+                    bool use_p2p = (listener->nat_type != frp_runtime_nat_type_disabled) && startup_probe_succeeded_;
                     request_flow(session, use_p2p);
                 }
             }
@@ -1575,22 +1836,28 @@ void frp_runtime_accessor_agent::start_accessor_p2p_read_loop(const std::shared_
                 return;
             }
 
-            // 5-byte: low_ttl_probe success (provider's packet reached us)
-            if (bytes_read == 5) {
-                if (session->low_ttl_probe_active && !session->p2p_success) {
+            // 6-byte: udp_punch probe packet (peer's packet reached us)
+            if (bytes_read == 6) {
+                if (session->punch_active && !session->p2p_success) {
                     std::uint32_t pkt_flow_id = 0;
                     std::memcpy(&pkt_flow_id, session->p2p_read_buf.data(), 4);
-                    FINFO("accessor p2p recv low_ttl probe flow_id={} pkt_flow_id={} ttl={}", session->flow_id, pkt_flow_id,
-                          static_cast<int>(session->p2p_read_buf[4]));
+                    std::uint16_t peer_local_port = 0;
+                    std::memcpy(&peer_local_port, session->p2p_read_buf.data() + 4, 2);
+                    FINFO("accessor p2p recv punch probe flow_id={} pkt_flow_id={} peer_local_port={}", session->flow_id, pkt_flow_id, peer_local_port);
                     if (pkt_flow_id == session->flow_id) {
                         session->p2p_success = true;
-                        session->low_ttl_probe_active = false;
-                        session->low_ttl_timer.cancel();
-                        std::error_code ep_ec;
-                        FINFO("low_ttl_probe succeeded flow_id={}", session->flow_id);
+                        session->punch_active = false;
+                        session->punch_timer.cancel();
+                        // Close all punch sockets (p2p_socket is the receiving one)
+                        for (auto& sock : session->punch_sockets) {
+                            if (sock) { std::error_code ec; sock->close(ec); }
+                        }
+                        session->punch_sockets.clear();
+                        FINFO("udp_punch succeeded flow_id={} peer_local_port={}", session->flow_id, peer_local_port);
                         frp_runtime_p2p_connected_data connected;
                         connected.command = frp_runtime_p2p_connected_command;
                         connected.flow_id = session->flow_id;
+                        connected.matched_peer_local_port = peer_local_port;
                         if (channel_) channel_->send_command(connected);
                     }
                 }
@@ -1657,7 +1924,9 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         join.role         = frp_runtime_accessor_role;
         join.uuid         = uuid_;
         join.register_key = config_.register_key;
-        join.enable_p2p = config_.enable_p2p && startup_probe_succeeded_;
+        join.nat_type = (config_.nat_type != frp_runtime_nat_type_disabled && startup_probe_succeeded_)
+                            ? config_.nat_type
+                            : frp_runtime_nat_type_disabled;
         channel_->send_command(join);
         return;
     }
@@ -1809,24 +2078,10 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             channel_->send_command(failed);
             return;
         }
-        session->low_ttl_probe_active = true;
-        session->low_ttl_round_index  = 0;
-        FINFO("accessor flow {} flow_p2p_peer peer={}:{} starting low_ttl_probe", session->flow_id, peer.peer_host, peer.peer_port);
-        start_low_ttl_probe_round(session);
-        return;
-    }
-    case frp_runtime_next_round_command: {
-        frp_runtime_next_round_data next;
-        if (!Fundamental::io::from_json(payload, next)) {
-            channel_->release_obj();
-            return;
-        }
-        auto it = sessions_by_flow_id_.find(next.flow_id);
-        if (it == sessions_by_flow_id_.end()) return;
-        auto session = it->second;
-        if (!session->low_ttl_probe_active || session->p2p_success) return;
-        session->low_ttl_round_index++;
-        start_low_ttl_probe_round(session);
+        session->peer_nat_type = peer.peer_nat_type;
+        FINFO("accessor flow {} flow_p2p_peer peer={}:{} peer_nat_type={} starting udp_punch",
+              session->flow_id, peer.peer_host, peer.peer_port, static_cast<int>(peer.peer_nat_type));
+        start_udp_punch(session);
         return;
     }
     case frp_runtime_peer_p2p_connected_command: {
@@ -1838,10 +2093,32 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         auto it = sessions_by_flow_id_.find(connected.flow_id);
         if (it == sessions_by_flow_id_.end()) return;
         auto session = it->second;
+        if (session->p2p_success) return;
+        // Find the punch socket matching matched_peer_local_port and promote it to p2p_socket
+        if (connected.matched_peer_local_port != 0 && !session->punch_sockets.empty()) {
+            for (auto& sock : session->punch_sockets) {
+                if (!sock) continue;
+                std::error_code ec;
+                auto lp = sock->local_endpoint(ec).port();
+                if (!ec && lp == connected.matched_peer_local_port) {
+                    session->p2p_socket = std::move(sock);
+                    break;
+                }
+            }
+        }
+        for (auto& sock : session->punch_sockets) {
+            if (sock) { std::error_code ec; sock->close(ec); }
+        }
+        session->punch_sockets.clear();
+        session->punch_active = false;
+        session->punch_timer.cancel();
         session->p2p_success = true;
-        session->low_ttl_probe_active = false;
-        session->low_ttl_timer.cancel();
-        FINFO("accessor flow {} peer_p2p_connected p2p_success=true", session->flow_id);
+        if (session->p2p_socket) {
+            session->p2p_send_context.socket        = &session->p2p_socket;
+            session->p2p_send_context.peer_endpoint = &session->p2p_peer_endpoint;
+            start_accessor_p2p_read_loop(session);
+        }
+        FINFO("accessor flow {} peer_p2p_connected p2p_success=true matched_port={}", session->flow_id, connected.matched_peer_local_port);
         return;
     }
     case frp_runtime_flow_data_command: {
@@ -1882,9 +2159,10 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
                 session->data_channel->release_obj();
                 session->data_channel = nullptr;
             }
-            if (!session->closed && !session->ready && session->enable_p2p && session->awaiting_p2p &&
-                !session->relay_retry_used && (failed.reason == frp_runtime_flow_failed_flow_endpoint_probe_timeout ||
-                                               failed.reason == frp_runtime_flow_failed_low_ttl_timeout)) {
+            if (!session->closed && !session->ready && session->nat_type != frp_runtime_nat_type_disabled &&
+                session->awaiting_p2p && !session->relay_retry_used &&
+                (failed.reason == frp_runtime_flow_failed_flow_endpoint_probe_timeout ||
+                 failed.reason == frp_runtime_flow_failed_punch_timeout)) {
                 pending_sessions_[session->session_id] = session;
                 request_flow(session, false);
                 FWARN("accessor session service_name={} retry relay after p2p failure", session->service_name);
@@ -1905,9 +2183,9 @@ void frp_runtime_accessor_agent::start_flow_endpoint_probe(const std::shared_ptr
         return;
     }
 
-    // Derive UDP encryption keys for this flow
-    session->udp_send_key = frp_derive_udp_flow_key(config_.traffic_secret, session->flow_id, true);
-    session->udp_recv_key = frp_derive_udp_flow_key(config_.traffic_secret, session->flow_id, false);
+    // Derive UDP encryption key for this flow (shared traffic key)
+    session->udp_send_key = frp_derive_traffic_key(config_.traffic_secret);
+    session->udp_recv_key = frp_derive_traffic_key(config_.traffic_secret);
     if (session->udp_send_key.empty() || session->udp_recv_key.empty()) {
         fail_session(session, "failed to derive UDP encryption keys");
         return;
@@ -1966,57 +2244,238 @@ void frp_runtime_accessor_agent::start_flow_endpoint_probe(const std::shared_ptr
     (*fn)();
 }
 
-void frp_runtime_accessor_agent::start_low_ttl_probe_round(const std::shared_ptr<accessor_session_context>& session) {
-    if (!session || !channel_ || session->closed || !session->low_ttl_probe_active || session->p2p_success) return;
-    if (session->low_ttl_round_index >= kLowTtlSequenceLen) {
-        frp_runtime_flow_failed_data failed;
-        failed.command = frp_runtime_flow_failed_command;
-        failed.flow_id = session->flow_id;
-        failed.reason  = frp_runtime_flow_failed_low_ttl_timeout;
-        failed.message = "low_ttl_probe all rounds exhausted";
-        reset_runtime_p2p_state(*session);
-        sessions_by_flow_id_.erase(session->flow_id);
-        channel_->send_command(failed);
-        return;
+void frp_runtime_accessor_agent::start_udp_punch(const std::shared_ptr<accessor_session_context>& session) {
+    if (!session || !channel_ || session->closed || session->p2p_success) return;
+
+    const bool i_am_symmetric = (session->nat_type == frp_runtime_nat_type_symmetric);
+    const bool peer_is_symmetric = (session->peer_nat_type == frp_runtime_nat_type_symmetric);
+
+    // Determine my role: if I am symmetric, I send from multiple sockets to peer's known port.
+    // If peer is symmetric (and I am full), I scan peer's port range with 1 socket.
+    // If both full: I scan with 1 socket (same as full-side logic).
+
+    std::mt19937 rng(std::random_device{}());
+
+    if (i_am_symmetric) {
+        // --- symmetric side: bind 32 sockets near local port xxx ---
+        std::error_code ec;
+        std::uint16_t xxx = session->p2p_socket ? session->p2p_socket->local_endpoint(ec).port() : 0;
+        if (ec || xxx == 0) {
+            // fallback: use any port
+            xxx = 40000;
+        }
+        session->punch_sockets.clear();
+        std::set<std::uint16_t> used;
+        // Always include xxx itself
+        {
+            auto sock = std::make_unique<asio::ip::udp::socket>(session->local_socket.get_executor());
+            if (!protocal_helper::udp_bind_endpoint(*sock, xxx)) {
+                session->punch_sockets.push_back(std::move(sock));
+                used.insert(xxx);
+            }
+        }
+        // Pick 31 more from [xxx-128, xxx+128] ∩ [1024, 65535]
+        std::uniform_int_distribution<int> dist(
+            std::max(1024, static_cast<int>(xxx) - 128),
+            std::min(65535, static_cast<int>(xxx) + 128));
+        int attempts = 0;
+        while (static_cast<int>(session->punch_sockets.size()) < kPunchSocketCount && attempts < 2000) {
+            attempts++;
+            auto port = static_cast<std::uint16_t>(dist(rng));
+            if (used.count(port)) continue;
+            auto sock = std::make_unique<asio::ip::udp::socket>(session->local_socket.get_executor());
+            if (protocal_helper::udp_bind_endpoint(*sock, port)) continue;
+            used.insert(port);
+            session->punch_sockets.push_back(std::move(sock));
+        }
+        FINFO("udp_punch symmetric accessor flow_id={} sockets={} target={}:{}",
+              session->flow_id, session->punch_sockets.size(),
+              session->p2p_peer_endpoint.address().to_string(), session->p2p_peer_endpoint.port());
+    } else {
+        // --- full side: 1 socket, scan peer's port range ---
+        if (!session->p2p_socket) {
+            FERR("udp_punch full accessor flow_id={} no p2p_socket", session->flow_id);
+            return;
+        }
+        session->punch_sockets.clear();
+        // We reuse p2p_socket for sending; no extra sockets needed
     }
-    std::uint8_t ttl = kLowTtlSequence[session->low_ttl_round_index];
-    // Build 5-byte packet: 4-byte LE flow_id + 1-byte ttl
-    std::array<std::uint8_t, 5> pkt {};
-    std::uint32_t fid = session->flow_id;
-    std::memcpy(pkt.data(), &fid, 4);
-    pkt[4] = ttl;
-    // Set socket TTL
-    std::error_code ec;
-    session->p2p_socket->set_option(asio::ip::unicast::hops(ttl), ec);
-    FINFO("low_ttl_probe round flow_id={} ttl={} round_index={} peer={}:{} packets={}",
-          session->flow_id, ttl, session->low_ttl_round_index,
-          session->p2p_peer_endpoint.address().to_string(), session->p2p_peer_endpoint.port(), kLowTtlPacketsPerRound);
-    // Send kLowTtlPacketsPerRound packets
-    for (int i = 0; i < kLowTtlPacketsPerRound; ++i) {
-        auto buf = std::make_shared<std::array<std::uint8_t, 5>>(pkt);
-        session->p2p_socket->async_send_to(asio::buffer(*buf), session->p2p_peer_endpoint,
-                                           [buf](const std::error_code&, std::size_t) {});
+
+    session->punch_active = true;
+    session->punch_round  = 0;
+
+    auto do_round = std::make_shared<std::function<void()>>();
+    *do_round = [this, self = shared_from_this(), session, do_round, i_am_symmetric, peer_is_symmetric]() mutable {
+        if (!reference_.is_valid() || session->closed || !session->punch_active || session->p2p_success) return;
+
+        const int max_rounds = kPunchMaxRounds + (i_am_symmetric ? 0 : 1); // full side has round 0 extra
+        if (session->punch_round >= max_rounds) {
+            frp_runtime_flow_failed_data failed;
+            failed.command = frp_runtime_flow_failed_command;
+            failed.flow_id = session->flow_id;
+            failed.reason  = frp_runtime_flow_failed_punch_timeout;
+            failed.message = "udp_punch all rounds exhausted";
+            reset_runtime_p2p_state(*session);
+            sessions_by_flow_id_.erase(session->flow_id);
+            if (channel_) channel_->send_command(failed);
+            return;
+        }
+
+        // Build list of target endpoints for this round
+        std::vector<asio::ip::udp::endpoint> targets;
+        if (i_am_symmetric) {
+            // symmetric: all sockets send to peer's known endpoint
+            targets.push_back(session->p2p_peer_endpoint);
+        } else {
+            // full side: pick ports to scan
+            std::mt19937 rng2(std::random_device{}());
+            const std::uint16_t peer_base = session->p2p_peer_endpoint.port();
+            const auto peer_addr = session->p2p_peer_endpoint.address();
+            if (session->punch_round == 0) {
+                // Round 0: [peer_base, peer_base+63] in random order
+                std::vector<std::uint16_t> ports;
+                for (int i = 0; i < kPunchScanRound0; ++i) {
+                    std::uint16_t p = static_cast<std::uint16_t>(peer_base + i);
+                    if (p < 23) continue;
+                    ports.push_back(p);
+                    session->punch_scanned_ports.insert(p);
+                }
+                std::shuffle(ports.begin(), ports.end(), rng2);
+                for (auto p : ports) targets.emplace_back(peer_addr, p);
+            } else {
+                // Rounds 1+: 128 random ports from [23,65535] not already scanned
+                std::uniform_int_distribution<int> dist(23, 65535);
+                int picked = 0, tries = 0;
+                while (picked < kPunchScanPerRound && tries < 100000) {
+                    tries++;
+                    auto p = static_cast<std::uint16_t>(dist(rng2));
+                    if (session->punch_scanned_ports.count(p)) continue;
+                    session->punch_scanned_ports.insert(p);
+                    targets.emplace_back(peer_addr, p);
+                    picked++;
+                }
+            }
+        }
+
+        // Send probes with retransmit
+        // For each target, send kPunchRetransmitCount times at kPunchRetransmitMs intervals
+        // We use a shared counter to chain retransmits
+        auto retransmit_index = std::make_shared<int>(0);
+        auto do_retransmit = std::make_shared<std::function<void()>>();
+        *do_retransmit = [this, self, session, do_round, do_retransmit, retransmit_index,
+                          targets = std::move(targets), i_am_symmetric]() mutable {
+            if (!reference_.is_valid() || session->closed || !session->punch_active || session->p2p_success) return;
+            if (*retransmit_index >= kPunchRetransmitCount) {
+                // Done with this round, schedule next round
+                session->punch_round++;
+                session->punch_timer.expires_after(std::chrono::milliseconds(kPunchRoundMs));
+                session->punch_timer.async_wait([do_round](const std::error_code& ec) mutable {
+                    if (ec) return;
+                    (*do_round)();
+                });
+                return;
+            }
+            (*retransmit_index)++;
+
+            // Build 6-byte probe packet
+            std::uint32_t fid = session->flow_id;
+            if (i_am_symmetric) {
+                // Each punch socket sends with its own local port
+                for (auto& sock : session->punch_sockets) {
+                    if (!sock) continue;
+                    std::error_code ec;
+                    std::uint16_t local_port = sock->local_endpoint(ec).port();
+                    if (ec) continue;
+                    auto pkt = std::make_shared<std::array<std::uint8_t, 6>>();
+                    std::memcpy(pkt->data(), &fid, 4);
+                    std::memcpy(pkt->data() + 4, &local_port, 2);
+                    sock->async_send_to(asio::buffer(*pkt), targets[0],
+                                        [pkt](const std::error_code&, std::size_t) {});
+                }
+            } else {
+                // full side: p2p_socket sends to each target
+                std::uint16_t local_port = 0;
+                {
+                    std::error_code ec;
+                    local_port = session->p2p_socket->local_endpoint(ec).port();
+                }
+                for (const auto& tgt : targets) {
+                    auto pkt = std::make_shared<std::array<std::uint8_t, 6>>();
+                    std::memcpy(pkt->data(), &fid, 4);
+                    std::memcpy(pkt->data() + 4, &local_port, 2);
+                    session->p2p_socket->async_send_to(asio::buffer(*pkt), tgt,
+                                                       [pkt](const std::error_code&, std::size_t) {});
+                }
+            }
+
+            session->punch_timer.expires_after(std::chrono::milliseconds(kPunchRetransmitMs));
+            session->punch_timer.async_wait([do_retransmit](const std::error_code& ec) mutable {
+                if (ec) return;
+                (*do_retransmit)();
+            });
+        };
+        (*do_retransmit)();
+    };
+
+    // Start read loop on p2p_socket to detect incoming punch packets
+    // (read loop already started in start_flow_endpoint_probe, but we need it active)
+    // For symmetric side, also start read loops on punch_sockets
+    if (i_am_symmetric) {
+        for (auto& sock : session->punch_sockets) {
+            if (!sock) continue;
+            // Start a simple receive loop on each punch socket
+            auto punch_sock_ptr = sock.get();
+            auto recv_buf = std::make_shared<std::array<char, 64>>();
+            auto recv_ep  = std::make_shared<asio::ip::udp::endpoint>();
+            std::function<void()> do_recv;
+            do_recv = [this, self = shared_from_this(), session, punch_sock_ptr, recv_buf, recv_ep, do_recv]() mutable {
+                if (!reference_.is_valid() || session->closed || !session->punch_active || session->p2p_success) return;
+                punch_sock_ptr->async_receive_from(
+                    asio::buffer(recv_buf->data(), recv_buf->size()), *recv_ep,
+                    [this, self, session, punch_sock_ptr, recv_buf, recv_ep, do_recv]
+                    (const std::error_code& ec, std::size_t bytes) mutable {
+                        if (!reference_.is_valid() || session->closed) return;
+                        if (!ec && bytes == 6 && session->punch_active && !session->p2p_success) {
+                            std::uint32_t pkt_fid = 0;
+                            std::memcpy(&pkt_fid, recv_buf->data(), 4);
+                            std::uint16_t peer_lp = 0;
+                            std::memcpy(&peer_lp, recv_buf->data() + 4, 2);
+                            if (pkt_fid == session->flow_id) {
+                                // Promote this socket
+                                for (auto& s : session->punch_sockets) {
+                                    if (s.get() == punch_sock_ptr) {
+                                        session->p2p_socket = std::move(s);
+                                        break;
+                                    }
+                                }
+                                for (auto& s : session->punch_sockets) {
+                                    if (s) { std::error_code ce; s->close(ce); }
+                                }
+                                session->punch_sockets.clear();
+                                session->punch_active = false;
+                                session->punch_timer.cancel();
+                                session->p2p_success = true;
+                                session->p2p_send_context.socket        = &session->p2p_socket;
+                                session->p2p_send_context.peer_endpoint = &session->p2p_peer_endpoint;
+                                session->p2p_peer_endpoint = *recv_ep;
+                                start_accessor_p2p_read_loop(session);
+                                FINFO("udp_punch succeeded (symmetric recv) flow_id={} peer_local_port={}", session->flow_id, peer_lp);
+                                frp_runtime_p2p_connected_data connected;
+                                connected.command = frp_runtime_p2p_connected_command;
+                                connected.flow_id = session->flow_id;
+                                connected.matched_peer_local_port = peer_lp;
+                                if (channel_) channel_->send_command(connected);
+                                return;
+                            }
+                        }
+                        if (!session->closed && session->punch_active && !session->p2p_success) do_recv();
+                    });
+            };
+            do_recv();
+        }
     }
-    // Send round_done to server
-    frp_runtime_round_done_data done;
-    done.command   = frp_runtime_round_done_command;
-    done.flow_id   = session->flow_id;
-    done.ttl_value = ttl;
-    channel_->send_command(done);
-    // Set per-round timeout (5 seconds)
-    session->low_ttl_timer.expires_after(std::chrono::seconds(5));
-    session->low_ttl_timer.async_wait([this, self = shared_from_this(), session](const std::error_code& ec) {
-        if (ec || !reference_.is_valid() || session->closed || !session->low_ttl_probe_active || session->p2p_success) return;
-        // Timeout waiting for next_round — fail
-        frp_runtime_flow_failed_data failed;
-        failed.command = frp_runtime_flow_failed_command;
-        failed.flow_id = session->flow_id;
-        failed.reason  = frp_runtime_flow_failed_low_ttl_timeout;
-        failed.message = "low_ttl_probe round timeout";
-        reset_runtime_p2p_state(*session);
-        sessions_by_flow_id_.erase(session->flow_id);
-        if (channel_) channel_->send_command(failed);
-    });
+
+    (*do_round)();
 }
 
 void frp_runtime_accessor_agent::start_local_read_loop(const std::shared_ptr<accessor_session_context>& session) {

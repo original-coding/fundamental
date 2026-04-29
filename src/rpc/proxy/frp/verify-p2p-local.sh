@@ -58,7 +58,7 @@ cat > "${WORK_DIR}/config/provider.json" <<EOF
   "public_server_udp_port": ${SERVER_UDP_PORT},
   "traffic_secret": "traffic-secret-demo",
   "register_key": "demo-register-key",
-  "enable_p2p": true,
+  "nat_type": 2,
   "ssl": { "disable_ssl": true },
   "services": [
     {
@@ -78,14 +78,14 @@ cat > "${WORK_DIR}/config/accessor.json" <<EOF
   "public_server_udp_port": ${SERVER_UDP_PORT},
   "traffic_secret": "traffic-secret-demo",
   "register_key": "demo-register-key",
-  "enable_p2p": true,
+  "nat_type": 2,
   "ssl": { "disable_ssl": true },
   "listeners": [
     {
       "service_name": "demo-web",
       "listen_host": "127.0.0.1",
       "listen_port": ${ACCESSOR_PORT},
-      "enable_p2p": true
+      "nat_type": 2
     }
   ]
 }
@@ -137,22 +137,22 @@ for i in $(seq 1 30); do
             echo ""
             # Verify log evidence
             STARTUP_OK=false
-            LOW_TTL_OK=false
+            PUNCH_OK=false
             TRANSPORT_OK=false
             if grep -q "p2p_probe_result=succeeded" "${WORK_DIR}/provider.log" 2>/dev/null || \
                grep -q "p2p_probe_result=succeeded" "${WORK_DIR}/accessor.log" 2>/dev/null; then
                 STARTUP_OK=true
             fi
-            if grep -q "low_ttl_probe succeeded" "${WORK_DIR}/provider.log" 2>/dev/null || \
-               grep -q "low_ttl_probe succeeded" "${WORK_DIR}/accessor.log" 2>/dev/null; then
-                LOW_TTL_OK=true
+            if grep -q "udp_punch succeeded" "${WORK_DIR}/provider.log" 2>/dev/null || \
+               grep -q "udp_punch succeeded" "${WORK_DIR}/accessor.log" 2>/dev/null; then
+                PUNCH_OK=true
             fi
             if grep -q "transport=p2p" "${WORK_DIR}/provider.log" 2>/dev/null || \
                grep -q "transport=p2p" "${WORK_DIR}/accessor.log" 2>/dev/null; then
                 TRANSPORT_OK=true
             fi
             echo "   startup_probe evidence : ${STARTUP_OK}"
-            echo "   low_ttl_probe evidence : ${LOW_TTL_OK}"
+            echo "   udp_punch evidence     : ${PUNCH_OK}"
             echo "   transport=p2p evidence : ${TRANSPORT_OK}"
             echo ""
             echo "=== tail logs ==="

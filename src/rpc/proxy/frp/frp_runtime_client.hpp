@@ -145,6 +145,7 @@ private:
     void schedule_reconnect();
     void process_command(const frp_runtime_command_base& command, std::string payload);
     void start_flow_endpoint_probe(const std::shared_ptr<provider_flow_runtime>& flow);
+    void start_udp_punch(const std::shared_ptr<provider_flow_runtime>& flow);
     void start_provider_p2p_read_loop(const std::shared_ptr<provider_flow_runtime>& flow);
     void schedule_provider_kcp_update(const std::shared_ptr<provider_flow_runtime>& flow);
     void provider_kcp_send(const std::shared_ptr<provider_flow_runtime>& flow, const char* data, std::size_t size);
@@ -183,18 +184,18 @@ private:
         std::string service_name;
         std::string listen_host;
         std::uint16_t listen_port = 0;
-        bool enable_p2p           = true;
+        std::uint8_t nat_type     = frp_runtime_nat_type_full;
         asio::ip::tcp::acceptor acceptor;
 
         listener_runtime(const asio::any_io_executor& executor,
                          std::string service_name,
                          std::string listen_host,
                          std::uint16_t listen_port,
-                         bool enable_p2p) :
+                         std::uint8_t nat_type) :
         service_name(std::move(service_name)),
         listen_host(std::move(listen_host)),
         listen_port(listen_port),
-        enable_p2p(enable_p2p),
+        nat_type(nat_type),
         acceptor(executor) {
         }
     };
@@ -207,7 +208,7 @@ private:
     void process_command(const frp_runtime_command_base& command, std::string payload);
     void request_flow(const std::shared_ptr<accessor_session_context>& session, bool enable_p2p_request);
     void start_flow_endpoint_probe(const std::shared_ptr<accessor_session_context>& session);
-    void start_low_ttl_probe_round(const std::shared_ptr<accessor_session_context>& session);
+    void start_udp_punch(const std::shared_ptr<accessor_session_context>& session);
     void start_accessor_p2p_read_loop(const std::shared_ptr<accessor_session_context>& session);
     void schedule_accessor_kcp_update(const std::shared_ptr<accessor_session_context>& session);
     void accessor_kcp_send(const std::shared_ptr<accessor_session_context>& session, const char* data, std::size_t size);

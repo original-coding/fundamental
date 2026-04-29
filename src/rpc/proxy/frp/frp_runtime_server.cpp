@@ -50,95 +50,55 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
             if (!ec && bytes_read > 0) {
                 FINFO("udp_server recv port_index={} bytes={} from={}:{}", index, bytes_read,
                       server->remote_endpoint.address().to_string(), server->remote_endpoint.port());
-                // Try to decrypt the packet
                 std::vector<std::uint8_t> encrypted_packet(server->read_buf.data(), server->read_buf.data() + bytes_read);
 
-                std::string payload;
-                bool decrypted = false;
-
-                // Try startup probe key first (flow_id=0, sender direction=true)
-                {
-                    auto startup_key = frp_derive_udp_flow_key(config_.traffic_secret, 0, true);
-                    auto plaintext = frp_udp_decrypt(startup_key, encrypted_packet);
-                    if (plaintext) {
-                        std::string probe_payload(plaintext->begin(), plaintext->end());
-                        FINFO("udp_server startup key decrypted payload_size={}", plaintext->size());
-                        frp_runtime_command_base cmd;
-                        if (Fundamental::io::from_json(probe_payload, cmd) && cmd.command == frp_runtime_p2p_probe_command) {
-                            frp_runtime_p2p_probe_data probe;
-                            if (Fundamental::io::from_json(probe_payload, probe) && probe.flow_id == 0) {
-                                frp_runtime_flow_endpoint_ready_data echo;
-                                echo.command       = frp_runtime_flow_endpoint_ready_command;
-                                echo.flow_id       = 0;
-                                echo.external_ip   = server->remote_endpoint.address().to_string();
-                                echo.external_port = server->remote_endpoint.port();
-                                FINFO("startup_probe received from {}:{} echoing external={}:{}",
-                                      server->remote_endpoint.address().to_string(), server->remote_endpoint.port(),
-                                      echo.external_ip, echo.external_port);
-                                auto echo_json = Fundamental::io::to_json(echo);
-                                auto resp_key  = frp_derive_udp_flow_key(config_.traffic_secret, 0, false);
-                                auto encrypted_resp = frp_udp_encrypt_string(resp_key, echo_json);
-                                if (!encrypted_resp.empty()) {
-                                    auto resp_buf = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted_resp));
-                                    FINFO("startup_probe sending response to {}:{} resp_size={}",
-                                          server->remote_endpoint.address().to_string(), server->remote_endpoint.port(),
-                                          resp_buf->size());
-                                    server->socket.async_send_to(
-                                        asio::buffer(*resp_buf), server->remote_endpoint,
-                                        [resp_buf](const std::error_code&, std::size_t) {});
-                                }
-                                start_udp_receive(index);
-                                return;
-                            }
-                        }
-                    }
-                }
-
-                // Per-flow key loop
-                {
-                    std::scoped_lock<std::mutex> locker(runtime_mutex_);
-                    FINFO("udp_server trying per-flow keys p2p_flows={}", flows_by_id_.size());
-                    for (const auto& [flow_id, flow] : flows_by_id_) {
-                        if (flow.transport != frp_runtime_transport_p2p) continue;
-
-                        auto provider_recv_key = frp_derive_udp_flow_key(config_.traffic_secret, flow_id, false);
-                        auto plaintext = frp_udp_decrypt(provider_recv_key, encrypted_packet);
-                        if (plaintext) {
-                            payload = std::string(plaintext->begin(), plaintext->end());
-                            decrypted = true;
-                            FINFO("udp_server decrypted with provider_recv_key flow_id={}", flow_id);
-                            break;
-                        }
-
-                        auto accessor_recv_key = frp_derive_udp_flow_key(config_.traffic_secret, flow_id, true);
-                        plaintext = frp_udp_decrypt(accessor_recv_key, encrypted_packet);
-                        if (plaintext) {
-                            payload = std::string(plaintext->begin(), plaintext->end());
-                            decrypted = true;
-                            FINFO("udp_server decrypted with accessor_recv_key flow_id={}", flow_id);
-                            break;
-                        }
-                    }
-                }
-
-                if (!decrypted) {
-                    FINFO("failed to decrypt UDP packet from {}:{} size={}", server->remote_endpoint.address().to_string(),
-                          server->remote_endpoint.port(), bytes_read);
+                // All UDP packets are encrypted with the shared traffic key
+                auto traffic_key = frp_derive_traffic_key(config_.traffic_secret);
+                auto plaintext = frp_udp_decrypt(traffic_key, encrypted_packet);
+                if (!plaintext) {
+                    FINFO("udp_server failed to decrypt packet from {}:{} size={}",
+                          server->remote_endpoint.address().to_string(), server->remote_endpoint.port(), bytes_read);
                     start_udp_receive(index);
                     return;
                 }
 
-                FINFO("udp_receive decrypted flow probe from {}:{} payload_size={}",
+                std::string payload(plaintext->begin(), plaintext->end());
+                FINFO("udp_receive decrypted from {}:{} payload_size={}",
                       server->remote_endpoint.address().to_string(), server->remote_endpoint.port(), payload.size());
 
                 frp_runtime_command_base command;
-                if (Fundamental::io::from_json(payload, command) && command.command == frp_runtime_p2p_probe_command) {
-                    frp_runtime_p2p_probe_data probe;
-                    if (Fundamental::io::from_json(payload, probe)) {
-                        std::string error_message;
-                        if (!register_p2p_probe(probe, server->remote_endpoint, error_message)) {
-                            FWARN("drop p2p probe flow_id={} uuid={} err={}", probe.flow_id, probe.uuid, error_message);
-                        }
+                if (!Fundamental::io::from_json(payload, command) || command.command != frp_runtime_p2p_probe_command) {
+                    start_udp_receive(index);
+                    return;
+                }
+                frp_runtime_p2p_probe_data probe;
+                if (!Fundamental::io::from_json(payload, probe)) {
+                    start_udp_receive(index);
+                    return;
+                }
+
+                if (probe.flow_id == 0) {
+                    // startup probe: echo back external endpoint
+                    frp_runtime_flow_endpoint_ready_data echo;
+                    echo.command       = frp_runtime_flow_endpoint_ready_command;
+                    echo.flow_id       = 0;
+                    echo.external_ip   = server->remote_endpoint.address().to_string();
+                    echo.external_port = server->remote_endpoint.port();
+                    FINFO("startup_probe received from {}:{} echoing external={}:{}",
+                          server->remote_endpoint.address().to_string(), server->remote_endpoint.port(),
+                          echo.external_ip, echo.external_port);
+                    auto echo_json = Fundamental::io::to_json(echo);
+                    auto encrypted_resp = frp_udp_encrypt_string(traffic_key, echo_json);
+                    if (!encrypted_resp.empty()) {
+                        auto resp_buf = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted_resp));
+                        server->socket.async_send_to(asio::buffer(*resp_buf), server->remote_endpoint,
+                                                     [resp_buf](const std::error_code&, std::size_t) {});
+                    }
+                } else {
+                    // flow endpoint probe
+                    std::string error_message;
+                    if (!register_p2p_probe(probe, server->remote_endpoint, error_message)) {
+                        FWARN("drop p2p probe flow_id={} uuid={} err={}", probe.flow_id, probe.uuid, error_message);
                     }
                 }
             }
@@ -199,12 +159,13 @@ bool frp_runtime_public_server::bind_signal_identity(const std::shared_ptr<frp_r
             auto& provider       = providers_by_uuid_[request.uuid];
             provider.uuid        = request.uuid;
             provider.register_key = request.register_key;
-            provider.enable_p2p = request.enable_p2p;
+            provider.nat_type    = request.nat_type;
             provider.session      = session;
         } else {
             auto& accessor       = accessors_by_uuid_[request.uuid];
             accessor.uuid        = request.uuid;
             accessor.register_key = request.register_key;
+            accessor.nat_type    = request.nat_type;
             accessor.session      = session;
         }
     }
@@ -265,7 +226,7 @@ bool frp_runtime_public_server::register_provider_services(
     for (const auto& service : services) {
         provider.services.insert(service.service_name);
         registry[service.service_name] =
-            frp_runtime_service_directory_entry { service.service_name, session->get_uuid(), session->get_enable_p2p() };
+            frp_runtime_service_directory_entry { service.service_name, session->get_uuid(), session->get_nat_type() };
     }
     return true;
 }
@@ -295,7 +256,7 @@ std::vector<frp_runtime_visible_service_data> frp_runtime_public_server::list_se
             frp_runtime_visible_service_data visible;
             visible.service_name           = service.service_name;
             visible.provider_uuid          = service.provider_uuid;
-            visible.provider_enable_p2p  = service.provider_enable_p2p;
+            visible.provider_nat_type      = service.provider_nat_type;
             result.push_back(std::move(visible));
         }
     }
@@ -607,6 +568,9 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         if (provider_it != providers_by_uuid_.end()) provider_signal_session = provider_it->second.session.lock();
         auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
         if (accessor_it != accessors_by_uuid_.end()) accessor_signal_session = accessor_it->second.session.lock();
+        // peer_nat_type: each side gets the other side's nat_type
+        provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : frp_runtime_nat_type_disabled;
+        accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : frp_runtime_nat_type_disabled;
     }
 
     if (both_ready) {
@@ -616,52 +580,6 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         if (provider_signal_session) provider_signal_session->send_command(provider_peer);
         if (accessor_signal_session) accessor_signal_session->send_command(accessor_peer);
     }
-    return true;
-}
-
-bool frp_runtime_public_server::forward_round_done(const std::shared_ptr<frp_runtime_signal_session>& session,
-                                                   const frp_runtime_round_done_data& data,
-                                                   std::string& error_message) {
-    std::shared_ptr<frp_runtime_signal_session> peer_session;
-    {
-        std::scoped_lock<std::mutex> locker(runtime_mutex_);
-        auto flow_it = flows_by_id_.find(data.flow_id);
-        if (flow_it == flows_by_id_.end()) {
-            FWARN("forward_round_done unknown flow_id={}", data.flow_id);
-            return true;
-        }
-        const auto& flow = flow_it->second;
-        if (!session || flow.accessor_uuid != session->get_uuid()) {
-            error_message = "round_done must come from accessor";
-            return false;
-        }
-        auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
-        if (provider_it != providers_by_uuid_.end()) peer_session = provider_it->second.session.lock();
-    }
-    if (peer_session) peer_session->send_command(data);
-    return true;
-}
-
-bool frp_runtime_public_server::forward_next_round(const std::shared_ptr<frp_runtime_signal_session>& session,
-                                                   const frp_runtime_next_round_data& data,
-                                                   std::string& error_message) {
-    std::shared_ptr<frp_runtime_signal_session> peer_session;
-    {
-        std::scoped_lock<std::mutex> locker(runtime_mutex_);
-        auto flow_it = flows_by_id_.find(data.flow_id);
-        if (flow_it == flows_by_id_.end()) {
-            FWARN("forward_next_round unknown flow_id={}", data.flow_id);
-            return true;
-        }
-        const auto& flow = flow_it->second;
-        if (!session || flow.provider_uuid != session->get_uuid()) {
-            error_message = "next_round must come from provider";
-            return false;
-        }
-        auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
-        if (accessor_it != accessors_by_uuid_.end()) peer_session = accessor_it->second.session.lock();
-    }
-    if (peer_session) peer_session->send_command(data);
     return true;
 }
 
@@ -695,6 +613,7 @@ bool frp_runtime_public_server::handle_p2p_connected(const std::shared_ptr<frp_r
         frp_runtime_peer_p2p_connected_data notify;
         notify.command = frp_runtime_peer_p2p_connected_command;
         notify.flow_id = data.flow_id;
+        notify.matched_peer_local_port = data.matched_peer_local_port;
         peer_session->send_command(notify);
     }
     return true;
@@ -1173,24 +1092,6 @@ void frp_runtime_signal_session::handle_authenticated_phase(const frp_runtime_co
         read_next_command();
         return;
     }
-    case frp_runtime_round_done_command: {
-        frp_runtime_round_done_data request;
-        if (!Fundamental::io::from_json(payload, request)) {
-            release_obj();
-            return;
-        }
-        handle_round_done_phase(request);
-        return;
-    }
-    case frp_runtime_next_round_command: {
-        frp_runtime_next_round_data request;
-        if (!Fundamental::io::from_json(payload, request)) {
-            release_obj();
-            return;
-        }
-        handle_next_round_phase(request);
-        return;
-    }
     case frp_runtime_p2p_connected_command: {
         frp_runtime_p2p_connected_data request;
         if (!Fundamental::io::from_json(payload, request)) {
@@ -1228,11 +1129,11 @@ void frp_runtime_signal_session::handle_join_phase(const frp_runtime_join_reques
         role_         = static_cast<role_type>(request.role);
         uuid_         = request.uuid;
         register_key_ = request.register_key;
-        enable_p2p_ = request.enable_p2p;
+        nat_type_     = request.nat_type;
         joined_       = true;
-        FINFO("signal_session join_request role={} uuid={} register_key={} enable_p2p={}",
+        FINFO("signal_session join_request role={} uuid={} register_key={} nat_type={}",
               request.role == frp_runtime_provider_role ? "provider" : "accessor",
-              uuid_, register_key_, enable_p2p_);
+              uuid_, register_key_, static_cast<int>(nat_type_));
     }
     send_command(response);
     if (!response.ok) {
@@ -1332,26 +1233,6 @@ void frp_runtime_signal_session::handle_flow_closed_phase(const frp_runtime_flow
     std::string error_message;
     if (!owner_ || !owner_->forward_flow_closed(shared_from_this(), request, error_message)) {
         FERR("flow_closed rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
-        release_obj();
-        return;
-    }
-    read_next_command();
-}
-
-void frp_runtime_signal_session::handle_round_done_phase(const frp_runtime_round_done_data& request) {
-    std::string error_message;
-    if (!owner_ || !owner_->forward_round_done(shared_from_this(), request, error_message)) {
-        FERR("round_done rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
-        release_obj();
-        return;
-    }
-    read_next_command();
-}
-
-void frp_runtime_signal_session::handle_next_round_phase(const frp_runtime_next_round_data& request) {
-    std::string error_message;
-    if (!owner_ || !owner_->forward_next_round(shared_from_this(), request, error_message)) {
-        FERR("next_round rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
         release_obj();
         return;
     }

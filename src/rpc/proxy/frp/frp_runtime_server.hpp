@@ -23,7 +23,7 @@ class frp_runtime_signal_session;
 struct frp_runtime_service_directory_entry {
     std::string service_name;
     std::string provider_uuid;
-    bool provider_enable_p2p = false;
+    std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
 };
 
 class frp_runtime_public_server : public std::enable_shared_from_this<frp_runtime_public_server>,
@@ -73,12 +73,6 @@ public:
     bool register_p2p_probe(const frp_runtime_p2p_probe_data& data,
                             const udp::endpoint& remote_endpoint,
                             std::string& error_message);
-    bool forward_round_done(const std::shared_ptr<frp_runtime_signal_session>& session,
-                            const frp_runtime_round_done_data& data,
-                            std::string& error_message);
-    bool forward_next_round(const std::shared_ptr<frp_runtime_signal_session>& session,
-                            const frp_runtime_next_round_data& data,
-                            std::string& error_message);
     bool handle_p2p_connected(const std::shared_ptr<frp_runtime_signal_session>& session,
                               const frp_runtime_p2p_connected_data& data,
                               std::string& error_message);
@@ -118,7 +112,7 @@ private:
     struct provider_runtime_state {
         std::string uuid;
         std::string register_key;
-        bool enable_p2p = false;
+        std::uint8_t nat_type = frp_runtime_nat_type_disabled;
         std::unordered_set<std::string> services;
         std::weak_ptr<frp_runtime_signal_session> session;
     };
@@ -126,6 +120,7 @@ private:
     struct accessor_runtime_state {
         std::string uuid;
         std::string register_key;
+        std::uint8_t nat_type = frp_runtime_nat_type_disabled;
         std::weak_ptr<frp_runtime_signal_session> session;
     };
 
@@ -213,8 +208,8 @@ public:
     role_type get_role() const {
         return role_;
     }
-    bool get_enable_p2p() const {
-        return enable_p2p_;
+    std::uint8_t get_nat_type() const {
+        return nat_type_;
     }
     std::uint32_t get_flow_id() const {
         return flow_id_;
@@ -248,8 +243,6 @@ private:
     void handle_flow_failed_phase(const frp_runtime_flow_failed_data& request);
     void handle_flow_data_phase(const frp_runtime_flow_data_data& request);
     void handle_flow_closed_phase(const frp_runtime_flow_closed_data& request);
-    void handle_round_done_phase(const frp_runtime_round_done_data& request);
-    void handle_next_round_phase(const frp_runtime_next_round_data& request);
     void handle_p2p_connected_phase(const frp_runtime_p2p_connected_data& request);
     void send_auth_failure_and_close(const std::string& message);
     void close_socket();
@@ -273,7 +266,7 @@ private:
     role_type role_             = frp_runtime_invalid_role;
     std::string uuid_;
     std::string register_key_;
-    bool enable_p2p_          = false;
+    std::uint8_t nat_type_        = frp_runtime_nat_type_disabled;
     bool authenticated_         = false;
     bool joined_                = false;
 

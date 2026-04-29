@@ -15,6 +15,10 @@ constexpr std::size_t FRP_UDP_KEY_SIZE = 32;  // ChaCha20 key size
 constexpr std::size_t FRP_UDP_NONCE_SIZE = 12; // ChaCha20-Poly1305 nonce size
 constexpr std::size_t FRP_UDP_TAG_SIZE = 16;   // Poly1305 tag size
 
+// Derive a single shared UDP key from traffic_secret.
+// All UDP packets (probe and data) use this key.
+std::vector<std::uint8_t> frp_derive_traffic_key(const std::string& traffic_secret);
+
 // Derive per-flow UDP encryption key from traffic_secret
 // Uses HKDF-SHA256 with flow_id and direction as context
 std::vector<std::uint8_t> frp_derive_udp_flow_key(
