@@ -327,6 +327,20 @@ frp_runtime_create_flow_response_data frp_runtime_public_server::create_flow(
             response.message = "server has no UDP ports";
             return response;
         }
+        if (requested_transport == frp_runtime_transport_p2p) {
+            const std::uint8_t accessor_nat = accessor_it->second.nat_type;
+            const std::uint8_t provider_nat = provider_it->second.nat_type;
+            const bool accessor_p2p_capable = (accessor_nat != frp_runtime_nat_type_disabled);
+            const bool provider_p2p_capable = (provider_nat != frp_runtime_nat_type_disabled);
+            const bool both_symmetric = (accessor_nat == frp_runtime_nat_type_symmetric &&
+                                         provider_nat == frp_runtime_nat_type_symmetric);
+            if (!accessor_p2p_capable || !provider_p2p_capable || both_symmetric) {
+                response.result  = frp_runtime_flow_result_p2p_unavailable;
+                response.message = "p2p not viable: accessor_nat=" + std::to_string(accessor_nat) +
+                                   " provider_nat=" + std::to_string(provider_nat);
+                return response;
+            }
+        }
         if (requested_transport != frp_runtime_transport_p2p &&
             requested_transport != frp_runtime_transport_tcp_relay) {
             response.result  = frp_runtime_flow_result_rejected;

@@ -704,7 +704,7 @@ void frp_runtime_provider_agent::schedule_reconnect() {
 void frp_runtime_provider_agent::start_udp_punch(const std::shared_ptr<provider_flow_runtime>& flow) {
     if (!flow || !channel_ || flow->closed || flow->p2p_success) return;
 
-    const bool i_am_symmetric = (config_.nat_type == frp_runtime_nat_type_symmetric);
+    const bool i_am_symmetric = (probed_nat_type_ == frp_runtime_nat_type_symmetric);
 
     std::mt19937 rng(std::random_device{}());
 
@@ -1187,6 +1187,16 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         flow->accessor_uuid = request.accessor_uuid;
         flows_[flow->flow_id] = flow;
         if (request.transport == frp_runtime_transport_p2p) {
+            if (probed_nat_type_ == frp_runtime_nat_type_disabled) {
+                frp_runtime_flow_failed_data failed;
+                failed.command = frp_runtime_flow_failed_command;
+                failed.flow_id = request.flow_id;
+                failed.reason  = frp_runtime_flow_failed_relay_channel_open_failed;
+                failed.message = "provider p2p unavailable (nat_type disabled)";
+                flows_.erase(flow->flow_id);
+                channel_->send_command(failed);
+                return;
+            }
             start_flow_endpoint_probe(flow);
             return;
         }
