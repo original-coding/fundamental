@@ -50,13 +50,29 @@ Symmetric NAT 对不同目标分配不同的外部端口，因此对端通过 `u
 固定 6 字节明文包：
 
 ```text
-+----------------------+---------------------+
-| 4 bytes flow_id LE   | 2 bytes local_port LE|
-+----------------------+---------------------+
++----------------------+---------------------+---------------------+
+| 2 bytes flow_id LE   | 2 bytes local_port LE| 2 bytes peer_port LE|
++----------------------+---------------------+---------------------+
 ```
 
-- `flow_id`：用于校验包的合法性，匹配当前 flow 即认为合法
-- `local_port`：发送方本地 UDP socket 绑定的端口，供对端命中后定位对应 socket
+- `flow_id`：取低 16 位，用于校验包的合法性
+- `local_port`：发送方本地 UDP socket 绑定的端口
+- `peer_port`：对方的内网端口，未知时填 0，收到对方探测包后立即回复时填入对方端口
+
+### 4.1 即时回复
+
+收到对方探测包后，**立即回复**一个正确填充 `peer_port` 的探测包：
+- `flow_id` = 收包中的 flow_id
+- `local_port` = 本端端口
+- `peer_port` = 收包中的 `local_port`（对方的端口）
+
+此回复不等下一轮 `do_punch_round`。
+
+### 4.2 打洞成功判定
+
+- 收到探测包且 `reflected_port == my_port`（对方确认了我的端口）→ 匹配计数 +1
+- 连续收到 2 次匹配包 → 判定打洞成功
+- 若已发送过确认探测包（`peer_port != 0`）但尚未收到 2 次匹配，此时 relay 被对方关闭（对方已判定成功），本方也视为成功
 
 ## 5. 打洞流程
 
@@ -78,15 +94,10 @@ accessor                  public_server                  provider
     |-- punch (同时) -------------------------------------------------->|
     |<------------------------------------------------- punch (同时) --|
     |                           |                           |
-    | [任意一方收到对端探测包]   |                           |
-    | 从包中读出对端 local_port  |                           |
-    |-- p2p_connected --------->|                           |
-    |   (含 matched_peer_local_port)                        |
-    |                           |-- peer_p2p_connected ---->|
-    |                           |   (含 matched_peer_local_port)
+    | [双方通过 UDP 直连完成确认，不经过服务器]              |
     |                           |                           |
-    | 保留命中的 socket          |          保留对应 socket  |
-    | 关闭其余 socket            |          关闭其余 socket  |
+    | 收到对方探测包 → 立即回复   |  收到对方探测包 → 立即回复 |
+    | 收到 2 次匹配包 → 判定成功  |  收到 2 次匹配包 → 判定成功 |
     |                           |                           |
     | KCP output 切换为 UDP      |     KCP output 切换为 UDP |
     | release TCP relay          |     release TCP relay     |
@@ -119,26 +130,29 @@ accessor                  public_server                  provider
 
 ## 7. 成功与失败
 
-**成功条件：** 任意一方收到对端发来的 6 字节探测包，且 `flow_id` 匹配。
+**成功条件：** 连续收到 2 次对端发来的 6 字节探测包且 `reflected_port == my_port`（对端确认了本端的端口）。
 
-**失败条件：** 32 轮内双方均未收到对端探测包，失败原因记为 `punch_timeout`，回退到 TCP relay。
+**提前成功（兜底）：** 若本方已发送过确认探测包（`peer_port != 0`）但尚未收到 2 次匹配，此时 relay 被对方关闭（对方已判定成功），本方也视为打洞成功。
+
+**失败条件：** 32 轮内未满足成功条件，失败原因记为 `punch_timeout`，回退到 TCP relay。
 
 ## 8. 成功后本地动作
 
-1. 从探测包中读出对端 `local_port`，保留对应 socket，关闭其余 socket
-2. 向 public_server 发送 `p2p_connected(flow_id, matched_peer_local_port)`
-3. 收到 `peer_p2p_connected(flow_id, matched_peer_local_port)` 后，另一侧同样执行步骤 1
-4. accessor 启动 1 字节 UDP keepalive
-5. `proxy_data_channel` 内部将 KCP output 从 TCP relay 切换为 UDP socket
-6. KCP 对未 ACK 的 segment 通过 UDP 路径重传，保证数据连续性
-7. release TCP relay 连接，停止 relay 接收
-8. 触发 `on_p2p_upgraded` 回调
+判定打洞成功后，双方**各自独立**执行以下步骤（不经过服务器中转确认）：
+
+1. 保留收到匹配包的 socket（full 侧即 `p2p_socket_`，symmetric 侧将匹配的 punch socket 提升为 `p2p_socket_`），关闭其余 punch socket
+2. `proxy_data_channel` 内部标记 `p2p_success_ = true`，调用 `switch_to_p2p()`
+3. KCP output 从 TCP relay 切换为 UDP socket（`kcp_output_callback` 检查 `p2p_success_`）
+4. KCP 对未 ACK 的 segment 通过 UDP 路径重传，保证数据连续性
+5. release TCP relay 连接，停止 relay 接收（relay 异步读端点的 error 被 `p2p_success_` 标志静默拦截）
+6. 启动 1 字节 UDP keepalive 定时器（每 10s）
+7. 触发 `on_p2p_upgraded` 回调
 
 ## 9. 与 UDP 小包协议的关系
 
 本地 UDP 收包入口严格按以下顺序分流：
 
 1. 长度 `== 1`：keepalive，静默丢弃
-2. 长度 `== 6`：打洞探测包；探测阶段处理，其他阶段静默丢弃
+2. 长度 `== 6`：打洞探测包（格式见 §4）；探测阶段按即时回复 + 匹配计数规则处理，其他阶段静默丢弃
 3. 长度 `< KCP 头最小长度` 且不属于前两类：静默丢弃
 4. 其余包：进入 KCP 数据面
