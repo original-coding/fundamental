@@ -573,7 +573,18 @@ void frp_runtime_provider_agent::connect_signal_channel() {
     });
     channel_->set_on_disconnected([this, self = shared_from_this()] {
         if (!reference_.is_valid()) return;
-        FERR("provider signal disconnected uuid={}", uuid_);
+        FERR("provider signal disconnected uuid={}, clear flows", uuid_);
+        for (auto& [_, flow] : flows_) {
+            flow->closed = true; // prevent on_disconnected_ from erasing during iteration
+            if (flow->data_channel) {
+                flow->data_channel->release_obj();
+                flow->data_channel = nullptr;
+            }
+            std::error_code ec;
+            flow->backend_socket.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+            flow->backend_socket.close(ec);
+        }
+        flows_.clear();
         channel_ = nullptr;
         schedule_reconnect();
     });

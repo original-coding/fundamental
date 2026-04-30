@@ -1013,6 +1013,8 @@ void frp_runtime_signal_session::start() {
 
 void frp_runtime_signal_session::release_obj() {
     if (!reference_.release()) return;
+    FINFO("signal_session release_obj uuid={} mode={} role={}", uuid_,
+          static_cast<int>(mode_), static_cast<int>(role_));
     if (owner_) owner_->release_session_state(this);
     asio::post(executor_, [this, self = shared_from_this()]() { close_socket(); });
 }
