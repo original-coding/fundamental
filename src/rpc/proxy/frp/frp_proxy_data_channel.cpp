@@ -458,11 +458,9 @@ void frp_proxy_data_channel::on_peer_p2p_connected(std::uint16_t matched_peer_lo
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::switch_to_p2p() {
-    if (relay_upstream_) {
-        relay_upstream_->release_obj();
-        relay_upstream_ = nullptr;
-    }
-    relay_transport_ = nullptr;
+    // Keep relay alive: releasing it would cause the server to detect a
+    // TCP disconnect and clean up the flow prematurely (sending flow_closed).
+    // The relay stays idle — KCP output already routes to UDP when p2p_success_ is set.
     relay_write_queue_.clear();
 
     std::error_code ep_ec;
@@ -474,6 +472,7 @@ void frp_proxy_data_channel::switch_to_p2p() {
           p2p_peer_endpoint_.address().to_string(), p2p_peer_endpoint_.port());
 
     schedule_p2p_keepalive();
+    start_p2p_read_loop();  // ensure UDP read loop is active after switch
     if (on_p2p_upgraded_) on_p2p_upgraded_();
 }
 
@@ -733,6 +732,7 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                         FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (full recv) peer_lp={}",
                               flow_id_, peer_lp);
                         if (on_punch_succeeded_) on_punch_succeeded_(peer_lp);
+                        start_p2p_read_loop();  // continue reading for KCP
                         return;
                     }
                     // Peer punched us before we started punching (or after local punch done).
@@ -744,6 +744,7 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                               flow_id_, peer_lp,
                               p2p_peer_endpoint_.address().to_string(), p2p_peer_endpoint_.port());
                         if (on_punch_succeeded_) on_punch_succeeded_(peer_lp);
+                        start_p2p_read_loop();  // continue reading for KCP
                         return;
                     }
                 }
