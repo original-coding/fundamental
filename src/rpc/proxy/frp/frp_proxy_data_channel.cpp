@@ -471,21 +471,48 @@ void frp_proxy_data_channel::switch_to_p2p() {
           flow_id_, local_str,
           p2p_peer_endpoint_.address().to_string(), p2p_peer_endpoint_.port());
 
-    schedule_p2p_keepalive();
+    schedule_p2p_idle_timer();
     start_p2p_read_loop();  // ensure UDP read loop is active after switch
     if (on_p2p_upgraded_) on_p2p_upgraded_();
 }
 
-void frp_proxy_data_channel::schedule_p2p_keepalive() {
+void frp_proxy_data_channel::schedule_p2p_idle_timer() {
     if (!reference_.is_valid() || !p2p_success_ || !p2p_socket_) return;
+    keepalive_probing_ = false;
+    keepalive_probe_count_ = 0;
+    p2p_timer_.cancel();
     p2p_timer_.expires_after(std::chrono::seconds(10));
     p2p_timer_.async_wait([this, self = shared_from_this()](const std::error_code& ec) {
         if (ec || !reference_.is_valid() || !p2p_success_ || !p2p_socket_) return;
-        std::uint8_t keepalive_byte = 0;
-        p2p_socket_->async_send_to(asio::buffer(&keepalive_byte, 1), p2p_peer_endpoint_,
-                                    [](const std::error_code&, std::size_t) {});
-        schedule_p2p_keepalive();
+        // 10s idle -> start probing
+        keepalive_probing_ = true;
+        do_keepalive_probe();
     });
+}
+
+void frp_proxy_data_channel::do_keepalive_probe() {
+    if (!reference_.is_valid() || !p2p_success_ || !p2p_socket_) return;
+    if (!keepalive_probing_) return;
+    if (keepalive_probe_count_ >= 15) {
+        FWARN("frp_proxy_data_channel flow_id={} p2p keepalive exhausted, disconnecting", flow_id_);
+        notify_disconnect_once();
+        return;
+    }
+    keepalive_probe_count_++;
+    std::uint8_t keepalive_byte = 0;
+    p2p_socket_->async_send_to(asio::buffer(&keepalive_byte, 1), p2p_peer_endpoint_,
+                                [](const std::error_code&, std::size_t) {});
+    p2p_timer_.expires_after(std::chrono::seconds(2));
+    p2p_timer_.async_wait([this, self = shared_from_this()](const std::error_code& ec) {
+        if (ec || !reference_.is_valid() || !p2p_success_ || !p2p_socket_) return;
+        do_keepalive_probe();
+    });
+}
+
+void frp_proxy_data_channel::reset_keepalive_timer() {
+    if (!p2p_success_) return;
+    p2p_timer_.cancel();
+    schedule_p2p_idle_timer();
 }
 
 // ---------------------------------------------------------------------------
@@ -734,8 +761,12 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                 return;
             }
 
-            // 1-byte keepalive
+            // 1-byte keepalive: immediately reply, then reset timer
             if (bytes_read == 1) {
+                std::uint8_t reply_byte = 0;
+                p2p_socket_->async_send_to(asio::buffer(&reply_byte, 1), p2p_recv_endpoint_,
+                                            [](const std::error_code&, std::size_t) {});
+                reset_keepalive_timer();
                 start_p2p_read_loop();
                 return;
             }
@@ -801,6 +832,7 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                 ikcp_update(kcp_.get(), now);
                 kcp_recv_loop();
             }
+            reset_keepalive_timer();
             start_p2p_read_loop();
         });
 }

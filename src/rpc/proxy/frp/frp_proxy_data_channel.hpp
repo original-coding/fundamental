@@ -111,7 +111,9 @@ private:
 
     // --- p2p switch ---
     void switch_to_p2p();
-    void schedule_p2p_keepalive();
+    void schedule_p2p_idle_timer();
+    void do_keepalive_probe();
+    void reset_keepalive_timer();
 
     // --- helpers ---
     static std::int32_t kcp_output_callback(const char* buf, int len, ikcpcb*, void* user);
@@ -173,6 +175,8 @@ private:
     bool upgrade_started_ = false;
     int punch_match_count_ = 0;  // count of probes with reflected_port == my_port
     bool confirmation_sent_ = false;  // we have replied with correct peer_port
+    int keepalive_probe_count_ = 0;   // consecutive keepalive probes without response
+    bool keepalive_probing_ = false;  // in 2s probing state (after 10s idle)
 
     // callbacks
     connected_callback_t on_connected_;

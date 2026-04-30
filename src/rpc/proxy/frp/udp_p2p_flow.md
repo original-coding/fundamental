@@ -145,14 +145,14 @@ accessor                  public_server                  provider
 3. KCP output 从 TCP relay 切换为 UDP socket（`kcp_output_callback` 检查 `p2p_success_`）
 4. KCP 对未 ACK 的 segment 通过 UDP 路径重传，保证数据连续性
 5. release TCP relay 连接，停止 relay 接收（relay 异步读端点的 error 被 `p2p_success_` 标志静默拦截）
-6. 启动 1 字节 UDP keepalive 定时器（每 10s）
+6. 启动 10s idle 超时定时器（无数据收包则每 2s 发保活探测，最多 15 次，收到保活立即回复，任何收包重置 idle）
 7. 触发 `on_p2p_upgraded` 回调
 
 ## 9. 与 UDP 小包协议的关系
 
 本地 UDP 收包入口严格按以下顺序分流：
 
-1. 长度 `== 1`：keepalive，静默丢弃
+1. 长度 `== 1`：keepalive，立即回复 1 字节并重置 idle 超时
 2. 长度 `== 6`：打洞探测包（格式见 §4）；探测阶段按即时回复 + 匹配计数规则处理，其他阶段静默丢弃
 3. 长度 `< KCP 头最小长度` 且不属于前两类：静默丢弃
 4. 其余包：进入 KCP 数据面
