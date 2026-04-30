@@ -499,7 +499,8 @@ void frp_proxy_data_channel::do_keepalive_probe() {
         return;
     }
     keepalive_probe_count_++;
-    std::uint8_t keepalive_byte = 0;
+    // Probe value in 0..127 to distinguish from replies (128..255)
+    std::uint8_t keepalive_byte = static_cast<std::uint8_t>(keepalive_probe_count_ & 0x7F);
     p2p_socket_->async_send_to(asio::buffer(&keepalive_byte, 1), p2p_peer_endpoint_,
                                 [](const std::error_code&, std::size_t) {});
     p2p_timer_.expires_after(std::chrono::seconds(2));
@@ -761,11 +762,15 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                 return;
             }
 
-            // 1-byte keepalive: immediately reply, then reset timer
+            // 1-byte keepalive: probes are 0..127, replies are 128..255.
+            // Only reply to probes, never to replies (avoids infinite loop).
             if (bytes_read == 1) {
-                std::uint8_t reply_byte = 0;
-                p2p_socket_->async_send_to(asio::buffer(&reply_byte, 1), p2p_recv_endpoint_,
-                                            [](const std::error_code&, std::size_t) {});
+                std::uint8_t val = static_cast<std::uint8_t>(p2p_read_buf_[0]);
+                if (val < 128) {
+                    std::uint8_t reply_byte = static_cast<std::uint8_t>(val + 128);
+                    p2p_socket_->async_send_to(asio::buffer(&reply_byte, 1), p2p_recv_endpoint_,
+                                                [](const std::error_code&, std::size_t) {});
+                }
                 reset_keepalive_timer();
                 start_p2p_read_loop();
                 return;
