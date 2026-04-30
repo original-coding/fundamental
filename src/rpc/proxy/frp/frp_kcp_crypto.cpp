@@ -32,13 +32,13 @@ std::vector<std::uint8_t> frp_derive_kcp_flow_key(
 
     const char* salt = "frp-kcp-v1";
     if (EVP_PKEY_CTX_set1_hkdf_salt(pctx,
-            reinterpret_cast<const unsigned char*>(salt), std::strlen(salt)) <= 0) {
+            reinterpret_cast<const unsigned char*>(salt), static_cast<int>(std::strlen(salt))) <= 0) {
         FERR("frp_derive_kcp_flow_key: EVP_PKEY_CTX_set1_hkdf_salt failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
     if (EVP_PKEY_CTX_set1_hkdf_key(pctx,
             reinterpret_cast<const unsigned char*>(traffic_secret.data()),
-            traffic_secret.size()) <= 0) {
+            static_cast<int>(traffic_secret.size())) <= 0) {
         FERR("frp_derive_kcp_flow_key: EVP_PKEY_CTX_set1_hkdf_key failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
@@ -46,7 +46,7 @@ std::vector<std::uint8_t> frp_derive_kcp_flow_key(
     std::string info = "flow:" + std::to_string(flow_id);
     if (EVP_PKEY_CTX_add1_hkdf_info(pctx,
             reinterpret_cast<const unsigned char*>(info.data()),
-            info.size()) <= 0) {
+            static_cast<int>(info.size())) <= 0) {
         FERR("frp_derive_kcp_flow_key: EVP_PKEY_CTX_add1_hkdf_info failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
@@ -72,7 +72,7 @@ std::vector<std::uint8_t> frp_kcp_encrypt(
 
     // Generate random IV
     std::vector<std::uint8_t> iv(FRP_KCP_IV_SIZE);
-    if (RAND_bytes(iv.data(), iv.size()) != 1) {
+    if (RAND_bytes(iv.data(), static_cast<int>(iv.size())) != 1) {
         FERR("frp_kcp_encrypt: RAND_bytes failed");
         return {};
     }
@@ -98,7 +98,7 @@ std::vector<std::uint8_t> frp_kcp_encrypt(
     std::vector<std::uint8_t> ciphertext(plaintext.size() + EVP_CIPHER_CTX_block_size(ctx));
     int len = 0;
     if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len,
-            plaintext.data(), plaintext.size()) != 1) {
+            plaintext.data(), static_cast<int>(plaintext.size())) != 1) {
         FERR("frp_kcp_encrypt: EVP_EncryptUpdate failed");
         EVP_CIPHER_CTX_free(ctx);
         return {};
@@ -157,7 +157,7 @@ std::optional<std::vector<std::uint8_t>> frp_kcp_decrypt(
     std::vector<std::uint8_t> plaintext(ciphertext_len + EVP_CIPHER_CTX_block_size(ctx));
     int len = 0;
     if (EVP_DecryptUpdate(ctx, plaintext.data(), &len,
-            ciphertext_ptr, ciphertext_len) != 1) {
+            ciphertext_ptr, static_cast<int>(ciphertext_len)) != 1) {
         FERR("frp_kcp_decrypt: EVP_DecryptUpdate failed");
         EVP_CIPHER_CTX_free(ctx);
         return std::nullopt;

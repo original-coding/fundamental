@@ -161,14 +161,14 @@ std::string frp_proxy_data_channel::local_p2p_endpoint() const {
 }
 
 // ---------------------------------------------------------------------------
-// start() — connect TCP relay, create KCP
+// start() -- connect TCP relay, create KCP
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::start() {
     // Derive symmetric KCP encryption key (both sides use the same key for this flow)
     kcp_traffic_key_ = frp_derive_kcp_flow_key(traffic_secret_, flow_id_);
 
-    // Create KCP instance (output → relay initially via kcp_output_callback)
+    // Create KCP instance (output -> relay initially via kcp_output_callback)
     kcp_ = std::unique_ptr<ikcpcb, kcp_releaser>(ikcp_create(flow_id_, &kcp_send_ctx_));
     ikcp_setoutput(kcp_.get(), kcp_output_callback);
     kcp_.get()->stream = 0;
@@ -208,7 +208,7 @@ void frp_proxy_data_channel::start() {
 }
 
 // ---------------------------------------------------------------------------
-// send_bytes — application data → KCP
+// send_bytes -- application data -> KCP
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::send_bytes(const char* data, std::size_t size) {
@@ -229,7 +229,7 @@ void frp_proxy_data_channel::kcp_send_raw(const char* data, std::size_t size) {
 }
 
 // ---------------------------------------------------------------------------
-// Relay read loop — feeds received bytes into KCP
+// Relay read loop -- feeds received bytes into KCP
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::start_relay_read_loop() {
@@ -243,7 +243,7 @@ void frp_proxy_data_channel::start_relay_read_loop() {
                 return;
             }
             if (p2p_success_) {
-                // Already switched to p2p — discard relay data
+                // Already switched to p2p -- discard relay data
                 start_relay_read_loop();
                 return;
             }
@@ -318,7 +318,7 @@ void frp_proxy_data_channel::kcp_recv_loop() {
 
 
 // ---------------------------------------------------------------------------
-// start_p2p_upgrade() — begin endpoint probe
+// start_p2p_upgrade() -- begin endpoint probe
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::start_p2p_upgrade() {
@@ -387,7 +387,7 @@ void frp_proxy_data_channel::do_endpoint_probe() {
 }
 
 // ---------------------------------------------------------------------------
-// set_p2p_peer() — called when server sends flow_p2p_peer
+// set_p2p_peer() -- called when server sends flow_p2p_peer
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::set_p2p_peer(const std::string& peer_host,
@@ -674,7 +674,7 @@ void frp_proxy_data_channel::do_punch_round() {
 }
 
 // ---------------------------------------------------------------------------
-// start_p2p_read_loop() — handles UDP packets on p2p_socket_
+// start_p2p_read_loop() -- handles UDP packets on p2p_socket_
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::start_p2p_read_loop() {
@@ -695,7 +695,7 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                 return;
             }
 
-            // 6-byte punch probe — accept both when we are actively punching
+            // 6-byte punch probe -- accept both when we are actively punching
             // and when the peer punches us first (before we received flow_p2p_peer)
             if (bytes_read == 6) {
                 std::uint32_t pkt_fid = 0;

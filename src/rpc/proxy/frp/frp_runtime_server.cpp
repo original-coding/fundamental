@@ -508,7 +508,7 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
             return false;
         }
 
-        // Treat probe as implicit upgrade request — set the flag for the probing side
+        // Treat probe as implicit upgrade request -- set the flag for the probing side
         if (is_provider) flow.provider_p2p_upgrade_requested = true;
         if (is_accessor) flow.accessor_p2p_upgrade_requested = true;
 
@@ -525,7 +525,7 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
             return true;
         }
 
-        // Check NAT compatibility before coordinating P2P — both sides must be p2p-capable
+        // Check NAT compatibility before coordinating P2P -- both sides must be p2p-capable
         {
             auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
             auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
@@ -580,8 +580,8 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
         if (accessor_it != accessors_by_uuid_.end()) accessor_signal_session = accessor_it->second.session.lock();
         // peer_nat_type: each side gets the other side's nat_type
-        provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : frp_runtime_nat_type_disabled;
-        accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : frp_runtime_nat_type_disabled;
+        provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
+        accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
     }
 
     if (both_ready) {
@@ -639,7 +639,7 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
         return false;
     }
     if (config_.listen_udp_port == 0) {
-        // Server has no UDP — silently ignore, p2p upgrade won't proceed
+        // Server has no UDP -- silently ignore, p2p upgrade won't proceed
         FINFO("handle_p2p_upgrade_request flow_id={} server has no UDP, ignoring", data.flow_id);
         return true;
     }
@@ -691,7 +691,7 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
         if (!accessor_p2p_capable || !provider_p2p_capable || both_symmetric) {
             FINFO("handle_p2p_upgrade_request flow_id={} p2p not viable accessor_nat={} provider_nat={}",
                   data.flow_id, static_cast<int>(accessor_nat), static_cast<int>(provider_nat));
-            return true; // silently skip — relay continues
+            return true; // silently skip -- relay continues
         }
         both_requested = true;
         provider_uuid = flow.provider_uuid;
@@ -751,8 +751,8 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
             if (provider_it != providers_by_uuid_.end()) provider_signal_session = provider_it->second.session.lock();
             auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
             if (accessor_it != accessors_by_uuid_.end()) accessor_signal_session = accessor_it->second.session.lock();
-            provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : frp_runtime_nat_type_disabled;
-            accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : frp_runtime_nat_type_disabled;
+            provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
+            accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
         }
 
         if (probes_ready) {

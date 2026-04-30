@@ -812,18 +812,18 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
                 flow->data_channel->local_relay_endpoint(),
                 flow->data_channel->remote_relay_endpoint());
         }
-        // Relay is ready — connect backend
+        // Relay is ready -- connect backend
         start_provider_backend_connect(flow);
         return;
     }
     case frp_runtime_flow_ready_command: {
-        // Provider receives flow_ready after sending it — this is the accessor's flow_ready
+        // Provider receives flow_ready after sending it -- this is the accessor's flow_ready
         // In new architecture, provider sends flow_ready after backend connects.
         // This case handles the server echoing flow_ready to provider (not used in new flow).
         return;
     }
     case frp_runtime_flow_endpoint_ready_command: {
-        // Handled internally by frp_proxy_data_channel — ignore here
+        // Handled internally by frp_proxy_data_channel -- ignore here
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {
@@ -1258,7 +1258,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         session->data_channel->enable_ssl(to_network_config(config_.ssl));
         session->data_channel->set_on_connected([this, self = shared_from_this(), session] {
             if (!reference_.is_valid() || session->closed) return;
-            // Relay connected — wait for flow_ready from server
+            // Relay connected -- wait for flow_ready from server
         });
         session->data_channel->set_on_disconnected([this, self = shared_from_this(), session] {
             if (!reference_.is_valid() || session->closed) return;
@@ -1320,7 +1320,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         return;
     }
     case frp_runtime_flow_endpoint_ready_command: {
-        // Handled internally by frp_proxy_data_channel — ignore here
+        // Handled internally by frp_proxy_data_channel -- ignore here
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {

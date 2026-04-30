@@ -9,7 +9,7 @@ namespace network::proxy
 {
 
 // KCP traffic encryption using AES-256-CTR (symmetric stream cipher).
-// No authentication tag — KCP provides its own integrity checks.
+// No authentication tag -- KCP provides its own integrity checks.
 // Key derivation using HKDF-SHA256 from traffic_secret + flow_id.
 //
 // flow_id=0 is used for non-flow traffic (probes, startup NAT detection).
@@ -21,7 +21,7 @@ constexpr std::size_t FRP_KCP_IV_SIZE  = 16;  // AES-CTR IV size
 
 // Derive per-flow KCP encryption key from traffic_secret and flow_id.
 // HKDF-SHA256 with salt "frp-kcp-v1", info "flow:<flow_id>".
-// Both sides call this with the same flow_id → identical key (symmetric).
+// Both sides call this with the same flow_id -> identical key (symmetric).
 std::vector<std::uint8_t> frp_derive_kcp_flow_key(
     const std::string& traffic_secret,
     std::uint32_t flow_id);

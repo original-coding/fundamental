@@ -26,9 +26,9 @@ namespace network::proxy
 //
 // Lifecycle:
 //   1. Construct with flow parameters
-//   2. start() — connects TCP relay, creates KCP (output → TCP relay)
-//   3. [optional] start_p2p_upgrade() — begins UDP endpoint probe
-//   4. [optional] set_p2p_peer() — triggers UDP punch after server sends peer info
+//   2. start() -- connects TCP relay, creates KCP (output -> TCP relay)
+//   3. [optional] start_p2p_upgrade() -- begins UDP endpoint probe
+//   4. [optional] set_p2p_peer() -- triggers UDP punch after server sends peer info
 //   5. On punch success: KCP output switches to UDP, TCP relay released
 //
 // Thread safety: all operations must be called from the same executor strand.
