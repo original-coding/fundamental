@@ -458,10 +458,17 @@ void frp_proxy_data_channel::on_peer_p2p_connected(std::uint16_t matched_peer_lo
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::switch_to_p2p() {
-    // Keep relay alive: releasing it would cause the server to detect a
-    // TCP disconnect and clean up the flow prematurely (sending flow_closed).
-    // The relay stays idle — KCP output already routes to UDP when p2p_success_ is set.
     relay_write_queue_.clear();
+
+    // Release relay TCP connection now that P2P is active.
+    // The server has p2p_signaled=true on this flow (set on the first
+    // p2p_connected), so the relay disconnect will be handled gracefully:
+    // clear the weak_ptr only, no flow_closed sent to the peer.
+    if (relay_upstream_) {
+        relay_upstream_->release_obj();
+        relay_upstream_ = nullptr;
+    }
+    relay_transport_ = nullptr;
 
     std::error_code ep_ec;
     std::string local_str = p2p_socket_ ?

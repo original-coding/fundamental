@@ -420,7 +420,7 @@ bool frp_runtime_public_server::forward_flow_closed(const std::shared_ptr<frp_ru
         if (flow_it == flows_by_id_.end()) {
             return true;
         }
-        const auto& flow = flow_it->second;
+        auto& flow = flow_it->second;
         const bool is_provider = session && flow.provider_uuid == session->get_uuid();
         const bool is_accessor = session && flow.accessor_uuid == session->get_uuid();
         if (!is_provider && !is_accessor) {
@@ -434,9 +434,14 @@ bool frp_runtime_public_server::forward_flow_closed(const std::shared_ptr<frp_ru
             auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
             if (provider_it != providers_by_uuid_.end()) peer_session = provider_it->second.session.lock();
         }
-        // Keep flow in flows_by_id_ so that in-flight P2P upgrade messages
-        // (p2p_connected, peer_p2p_connected) can still be processed.
-        // release_session_state() will erase it when data sessions disconnect.
+        if (flow.p2p_signaled) {
+            // P2P upgrade completed; data sessions are already released.
+            // release_session_state won't match them, so erase here explicitly.
+            flows_by_id_.erase(flow_it);
+        }
+        // For non-p2p flows: keep in flows_by_id_ so in-flight P2P messages
+        // can still be processed. release_session_state() will erase when
+        // data sessions disconnect.
     }
     if (peer_session) peer_session->send_command(data);
     return true;
@@ -605,6 +610,7 @@ bool frp_runtime_public_server::handle_p2p_connected(const std::shared_ptr<frp_r
             FWARN("handle_p2p_connected unknown flow_id={}", data.flow_id);
             return true;
         }
+        flow_it->second.p2p_signaled = true;
         const auto& flow = flow_it->second;
         const bool is_provider = session && flow.provider_uuid == session->get_uuid();
         const bool is_accessor = session && flow.accessor_uuid == session->get_uuid();
@@ -885,27 +891,74 @@ void frp_runtime_public_server::release_session_state(const frp_runtime_signal_s
         }
 
         for (auto it = flows_by_id_.begin(); it != flows_by_id_.end();) {
-            auto provider_data = it->second.provider_data_session.lock();
-            auto accessor_data = it->second.accessor_data_session.lock();
-            if ((provider_data && provider_data.get() == session_ptr) || (accessor_data && accessor_data.get() == session_ptr)) {
-                if (provider_data && provider_data.get() != session_ptr) peer_data_sessions.push_back(provider_data);
-                if (accessor_data && accessor_data.get() != session_ptr) peer_data_sessions.push_back(accessor_data);
-                auto provider_it = providers_by_uuid_.find(it->second.provider_uuid);
-                if (provider_it != providers_by_uuid_.end()) {
-                    if (auto signal = provider_it->second.session.lock(); signal && signal.get() != session_ptr) {
-                        peer_signal_sessions.push_back(signal);
+            auto& flow = it->second;
+            auto provider_data = flow.provider_data_session.lock();
+            auto accessor_data = flow.accessor_data_session.lock();
+            bool is_provider_data = provider_data && provider_data.get() == session_ptr;
+            bool is_accessor_data = accessor_data && accessor_data.get() == session_ptr;
+            if (is_provider_data || is_accessor_data) {
+                if (flow.p2p_signaled) {
+                    // Relay release after successful P2P upgrade -- expected.
+                    // Clear the matching weak_ptr but keep the flow alive.
+                    // The peer's relay is still active (or will be released
+                    // by its own switch_to_p2p soon).
+                    if (is_provider_data) flow.provider_data_session = {};
+                    if (is_accessor_data) flow.accessor_data_session = {};
+                    FINFO("release_session_state p2p_signaled flow_id={} {} relay released, flow kept",
+                          flow.flow_id, is_provider_data ? "provider" : "accessor");
+                    ++it;
+                } else {
+                    if (provider_data && !is_provider_data) peer_data_sessions.push_back(provider_data);
+                    if (accessor_data && !is_accessor_data) peer_data_sessions.push_back(accessor_data);
+                    auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
+                    if (provider_it != providers_by_uuid_.end()) {
+                        if (auto signal = provider_it->second.session.lock(); signal && signal.get() != session_ptr) {
+                            peer_signal_sessions.push_back(signal);
+                        }
                     }
-                }
-                auto accessor_it = accessors_by_uuid_.find(it->second.accessor_uuid);
-                if (accessor_it != accessors_by_uuid_.end()) {
-                    if (auto signal = accessor_it->second.session.lock(); signal && signal.get() != session_ptr) {
-                        peer_signal_sessions.push_back(signal);
+                    auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
+                    if (accessor_it != accessors_by_uuid_.end()) {
+                        if (auto signal = accessor_it->second.session.lock(); signal && signal.get() != session_ptr) {
+                            peer_signal_sessions.push_back(signal);
+                        }
                     }
+                    erased_flows.push_back(it->first);
+                    it = flows_by_id_.erase(it);
                 }
-                erased_flows.push_back(it->first);
-                it = flows_by_id_.erase(it);
             } else {
                 ++it;
+            }
+        }
+
+        // When a signal session disconnects, clean up p2p-signaled flows
+        // associated with its uuid. Relays are already released so the
+        // data-session loop above won't match; we must erase explicitly
+        // to prevent the flow from leaking in flows_by_id_.
+        if (!session_ptr->is_data_session()) {
+            const auto& uuid = session_ptr->get_uuid();
+            for (auto it = flows_by_id_.begin(); it != flows_by_id_.end();) {
+                auto& flow = it->second;
+                if (flow.p2p_signaled && (uuid == flow.provider_uuid || uuid == flow.accessor_uuid)) {
+                    if (uuid == flow.provider_uuid) {
+                        auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
+                        if (accessor_it != accessors_by_uuid_.end()) {
+                            if (auto signal = accessor_it->second.session.lock()) {
+                                peer_signal_sessions.push_back(signal);
+                            }
+                        }
+                    } else {
+                        auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
+                        if (provider_it != providers_by_uuid_.end()) {
+                            if (auto signal = provider_it->second.session.lock()) {
+                                peer_signal_sessions.push_back(signal);
+                            }
+                        }
+                    }
+                    erased_flows.push_back(it->first);
+                    it = flows_by_id_.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
     }

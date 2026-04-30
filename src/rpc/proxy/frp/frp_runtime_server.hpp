@@ -138,6 +138,9 @@ private:
         // p2p upgrade: set when each side sends p2p_upgrade_request
         bool provider_p2p_upgrade_requested = false;
         bool accessor_p2p_upgrade_requested = false;
+        // p2p upgrade: set when the first p2p_connected arrives, tells
+        // release_session_state that relay disconnects are expected
+        bool p2p_signaled = false;
         std::weak_ptr<frp_runtime_signal_session> provider_data_session;
         std::weak_ptr<frp_runtime_signal_session> accessor_data_session;
         p2p_probe_state provider_probe;
