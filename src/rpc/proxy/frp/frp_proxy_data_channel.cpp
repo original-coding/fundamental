@@ -129,6 +129,8 @@ void frp_proxy_data_channel::set_on_p2p_upgrade_failed(p2p_upgrade_failed_callba
 
 void frp_proxy_data_channel::release_obj() {
     if (!reference_.release()) return;
+    FINFO("frp_proxy_data_channel flow_id={} release_obj transport={}",
+          flow_id_, p2p_success_ ? "p2p" : "tcp_relay");
     kcp_update_timer_.cancel();
     endpoint_probe_timer_.cancel();
     punch_timer_.cancel();
@@ -200,6 +202,8 @@ void frp_proxy_data_channel::start() {
             relay_do_write();
 
             relay_connected_ = true;
+            FINFO("frp_proxy_data_channel flow_id={} relay established local={} remote={}",
+                  flow_id_, local_relay_endpoint(), remote_relay_endpoint());
             if (on_connected_) on_connected_();
             start_relay_read_loop();
         });
