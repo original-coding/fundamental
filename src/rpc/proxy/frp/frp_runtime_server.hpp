@@ -73,9 +73,6 @@ public:
     bool register_p2p_probe(const frp_runtime_p2p_probe_data& data,
                             const udp::endpoint& remote_endpoint,
                             std::string& error_message);
-    bool handle_p2p_connected(const std::shared_ptr<frp_runtime_signal_session>& session,
-                              const frp_runtime_p2p_connected_data& data,
-                              std::string& error_message);
     bool handle_p2p_upgrade_request(const std::shared_ptr<frp_runtime_signal_session>& session,
                                     const frp_runtime_p2p_upgrade_request_data& data,
                                     std::string& error_message);
@@ -138,7 +135,7 @@ private:
         // p2p upgrade: set when each side sends p2p_upgrade_request
         bool provider_p2p_upgrade_requested = false;
         bool accessor_p2p_upgrade_requested = false;
-        // p2p upgrade: set when the first p2p_connected arrives, tells
+        // p2p upgrade: set when flow_p2p_peer is sent, tells
         // release_session_state that relay disconnects are expected
         bool p2p_signaled = false;
         std::weak_ptr<frp_runtime_signal_session> provider_data_session;
@@ -252,7 +249,6 @@ private:
     void handle_flow_failed_phase(const frp_runtime_flow_failed_data& request);
     void handle_flow_data_phase(const frp_runtime_flow_data_data& request);
     void handle_flow_closed_phase(const frp_runtime_flow_closed_data& request);
-    void handle_p2p_connected_phase(const frp_runtime_p2p_connected_data& request);
     void handle_p2p_upgrade_request_phase(const frp_runtime_p2p_upgrade_request_data& request);
     void send_auth_failure_and_close(const std::string& message);
     void close_socket();

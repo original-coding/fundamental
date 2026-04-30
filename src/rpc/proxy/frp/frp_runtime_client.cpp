@@ -784,14 +784,6 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             flow->pending_writes.push_back(std::move(data));
             handle_backend_write_queue(flow);
         });
-        flow->data_channel->set_on_punch_succeeded([this, self = shared_from_this(), flow](std::uint16_t matched_port) {
-            if (!reference_.is_valid() || !channel_) return;
-            frp_runtime_p2p_connected_data connected;
-            connected.command = frp_runtime_p2p_connected_command;
-            connected.flow_id = flow->flow_id;
-            connected.matched_peer_local_port = matched_port;
-            channel_->send_command(connected);
-        });
         flow->data_channel->set_on_p2p_upgraded([this, self = shared_from_this(), flow] {
             if (!reference_.is_valid()) return;
             FINFO("provider flow {} p2p upgrade complete", flow->flow_id);
@@ -850,20 +842,6 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         FINFO("provider flow {} flow_p2p_peer peer={}:{} peer_nat_type={}",
               flow->flow_id, peer.peer_host, peer.peer_port, static_cast<int>(peer.peer_nat_type));
         flow->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type);
-        return;
-    }
-    case frp_runtime_peer_p2p_connected_command: {
-        frp_runtime_peer_p2p_connected_data connected;
-        if (!Fundamental::io::from_json(payload, connected)) {
-            channel_->release_obj();
-            return;
-        }
-        auto it = flows_.find(connected.flow_id);
-        if (it == flows_.end()) return;
-        auto flow = it->second;
-        if (!flow->data_channel) return;
-        FINFO("provider flow {} peer_p2p_connected matched_port={}", flow->flow_id, connected.matched_peer_local_port);
-        flow->data_channel->on_peer_p2p_connected(connected.matched_peer_local_port);
         return;
     }
     case frp_runtime_flow_data_command: {
@@ -1280,14 +1258,6 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             session->pending_writes.push_back(std::move(data));
             handle_local_write_queue(session);
         });
-        session->data_channel->set_on_punch_succeeded([this, self = shared_from_this(), session](std::uint16_t matched_port) {
-            if (!reference_.is_valid() || !channel_) return;
-            frp_runtime_p2p_connected_data connected;
-            connected.command = frp_runtime_p2p_connected_command;
-            connected.flow_id = session->flow_id;
-            connected.matched_peer_local_port = matched_port;
-            channel_->send_command(connected);
-        });
         session->data_channel->set_on_p2p_upgraded([this, self = shared_from_this(), session] {
             if (!reference_.is_valid()) return;
             FINFO("accessor session {} flow {} p2p upgrade complete", session->session_id, session->flow_id);
@@ -1348,21 +1318,6 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
               session->session_id, session->flow_id, peer.peer_host, peer.peer_port,
               static_cast<int>(peer.peer_nat_type));
         session->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type);
-        return;
-    }
-    case frp_runtime_peer_p2p_connected_command: {
-        frp_runtime_peer_p2p_connected_data connected;
-        if (!Fundamental::io::from_json(payload, connected)) {
-            channel_->release_obj();
-            return;
-        }
-        auto it = sessions_by_flow_id_.find(connected.flow_id);
-        if (it == sessions_by_flow_id_.end()) return;
-        auto session = it->second;
-        if (!session->data_channel) return;
-        FINFO("accessor session {} flow {} peer_p2p_connected matched_port={}",
-              session->session_id, session->flow_id, connected.matched_peer_local_port);
-        session->data_channel->on_peer_p2p_connected(connected.matched_peer_local_port);
         return;
     }
     case frp_runtime_flow_data_command: {

@@ -39,7 +39,6 @@ public:
     using connected_callback_t           = std::function<void()>;
     using disconnected_callback_t        = std::function<void()>;
     using data_callback_t                = std::function<void(std::string)>;
-    using punch_succeeded_callback_t     = std::function<void(std::uint16_t matched_peer_local_port)>;
     using p2p_upgraded_callback_t        = std::function<void()>;
     using p2p_upgrade_failed_callback_t  = std::function<void()>;
 
@@ -64,7 +63,6 @@ public:
     void set_on_connected(connected_callback_t cb);
     void set_on_disconnected(disconnected_callback_t cb);
     void set_on_data(data_callback_t cb);
-    void set_on_punch_succeeded(punch_succeeded_callback_t cb);
     void set_on_p2p_upgraded(p2p_upgraded_callback_t cb);
     void set_on_p2p_upgrade_failed(p2p_upgrade_failed_callback_t cb);
 
@@ -84,9 +82,6 @@ public:
     void set_p2p_peer(const std::string& peer_host,
                       std::uint16_t peer_port,
                       std::uint8_t peer_nat_type);
-
-    // Notify that peer has completed punch (from peer_p2p_connected command)
-    void on_peer_p2p_connected(std::uint16_t matched_peer_local_port);
 
     // Returns true if p2p upgrade has completed
     bool is_p2p_active() const { return p2p_success_; }
@@ -173,15 +168,16 @@ private:
     std::size_t endpoint_probe_attempts_ = 0;
     bool awaiting_endpoint_ready_ = false;
     bool punch_active_ = false;
-    bool punch_done_ = false;   // local punch succeeded; waiting for peer_p2p_connected
-    bool p2p_success_ = false;  // both sides confirmed; switch_to_p2p() called
+    bool punch_done_ = false;   // local punch matched (2+ reflected probes)
+    bool p2p_success_ = false;  // switch_to_p2p() called
     bool upgrade_started_ = false;
+    int punch_match_count_ = 0;  // count of probes with reflected_port == my_port
+    bool confirmation_sent_ = false;  // we have replied with correct peer_port
 
     // callbacks
     connected_callback_t on_connected_;
     disconnected_callback_t on_disconnected_;
     data_callback_t on_data_;
-    punch_succeeded_callback_t on_punch_succeeded_;
     p2p_upgraded_callback_t on_p2p_upgraded_;
     p2p_upgrade_failed_callback_t on_p2p_upgrade_failed_;
 };

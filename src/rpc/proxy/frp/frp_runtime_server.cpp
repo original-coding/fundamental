@@ -587,6 +587,10 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         // peer_nat_type: each side gets the other side's nat_type
         provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
         accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
+
+        // Mark flow so release_session_state tolerates relay disconnects
+        // that will happen when both sides call switch_to_p2p().
+        flow.p2p_signaled = true;
     }
 
     if (both_ready) {
@@ -595,43 +599,6 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         if (accessor_signal_session) accessor_signal_session->send_command(accessor_ep_ready);
         if (provider_signal_session) provider_signal_session->send_command(provider_peer);
         if (accessor_signal_session) accessor_signal_session->send_command(accessor_peer);
-    }
-    return true;
-}
-
-bool frp_runtime_public_server::handle_p2p_connected(const std::shared_ptr<frp_runtime_signal_session>& session,
-                                                     const frp_runtime_p2p_connected_data& data,
-                                                     std::string& error_message) {
-    std::shared_ptr<frp_runtime_signal_session> peer_session;
-    {
-        std::scoped_lock<std::mutex> locker(runtime_mutex_);
-        auto flow_it = flows_by_id_.find(data.flow_id);
-        if (flow_it == flows_by_id_.end()) {
-            FWARN("handle_p2p_connected unknown flow_id={}", data.flow_id);
-            return true;
-        }
-        flow_it->second.p2p_signaled = true;
-        const auto& flow = flow_it->second;
-        const bool is_provider = session && flow.provider_uuid == session->get_uuid();
-        const bool is_accessor = session && flow.accessor_uuid == session->get_uuid();
-        if (!is_provider && !is_accessor) {
-            error_message = "p2p_connected uuid mismatch";
-            return false;
-        }
-        if (is_provider) {
-            auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
-            if (accessor_it != accessors_by_uuid_.end()) peer_session = accessor_it->second.session.lock();
-        } else {
-            auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
-            if (provider_it != providers_by_uuid_.end()) peer_session = provider_it->second.session.lock();
-        }
-    }
-    if (peer_session) {
-        frp_runtime_peer_p2p_connected_data notify;
-        notify.command = frp_runtime_peer_p2p_connected_command;
-        notify.flow_id = data.flow_id;
-        notify.matched_peer_local_port = data.matched_peer_local_port;
-        peer_session->send_command(notify);
     }
     return true;
 }
@@ -1293,15 +1260,6 @@ void frp_runtime_signal_session::handle_authenticated_phase(const frp_runtime_co
         read_next_command();
         return;
     }
-    case frp_runtime_p2p_connected_command: {
-        frp_runtime_p2p_connected_data request;
-        if (!Fundamental::io::from_json(payload, request)) {
-            release_obj();
-            return;
-        }
-        handle_p2p_connected_phase(request);
-        return;
-    }
     case frp_runtime_p2p_upgrade_request_command: {
         frp_runtime_p2p_upgrade_request_data request;
         if (!Fundamental::io::from_json(payload, request)) {
@@ -1443,16 +1401,6 @@ void frp_runtime_signal_session::handle_flow_closed_phase(const frp_runtime_flow
     std::string error_message;
     if (!owner_ || !owner_->forward_flow_closed(shared_from_this(), request, error_message)) {
         FERR("flow_closed rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
-        release_obj();
-        return;
-    }
-    read_next_command();
-}
-
-void frp_runtime_signal_session::handle_p2p_connected_phase(const frp_runtime_p2p_connected_data& request) {
-    std::string error_message;
-    if (!owner_ || !owner_->handle_p2p_connected(shared_from_this(), request, error_message)) {
-        FERR("p2p_connected rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
         release_obj();
         return;
     }

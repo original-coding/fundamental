@@ -29,8 +29,6 @@ enum frp_runtime_command_type : std::uint8_t
     frp_runtime_p2p_probe_command,
     frp_runtime_flow_p2p_peer_command,
     frp_runtime_flow_endpoint_ready_command,
-    frp_runtime_p2p_connected_command,
-    frp_runtime_peer_p2p_connected_command,
     frp_runtime_flow_transport_ready_command,
     frp_runtime_p2p_upgrade_request_command,
     frp_runtime_flow_ready_command,
@@ -207,18 +205,6 @@ struct frp_runtime_flow_endpoint_ready_data : frp_runtime_command_base {
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
-struct frp_runtime_p2p_connected_data : frp_runtime_command_base {
-    std::uint32_t flow_id = 0;
-    std::uint16_t matched_peer_local_port = 0;
-    RTTR_ENABLE(frp_runtime_command_base)
-};
-
-struct frp_runtime_peer_p2p_connected_data : frp_runtime_command_base {
-    std::uint32_t flow_id = 0;
-    std::uint16_t matched_peer_local_port = 0;
-    RTTR_ENABLE(frp_runtime_command_base)
-};
-
 struct frp_runtime_flow_transport_ready_data : frp_runtime_command_base {
     std::uint32_t flow_id = 0;
     RTTR_ENABLE(frp_runtime_command_base)
@@ -388,17 +374,6 @@ inline void __register_frp_runtime_reflect_type__() {
         .property("flow_id", &frp_runtime_flow_endpoint_ready_data::flow_id)
         .property("external_ip", &frp_runtime_flow_endpoint_ready_data::external_ip)
         .property("external_port", &frp_runtime_flow_endpoint_ready_data::external_port);
-
-    rttr::registration::class_<frp_runtime_p2p_connected_data>("network::proxy::frp_runtime_p2p_connected_data")
-        .constructor()(rttr::policy::ctor::as_object)
-        .property("flow_id", &frp_runtime_p2p_connected_data::flow_id)
-        .property("matched_peer_local_port", &frp_runtime_p2p_connected_data::matched_peer_local_port);
-
-    rttr::registration::class_<frp_runtime_peer_p2p_connected_data>(
-        "network::proxy::frp_runtime_peer_p2p_connected_data")
-        .constructor()(rttr::policy::ctor::as_object)
-        .property("flow_id", &frp_runtime_peer_p2p_connected_data::flow_id)
-        .property("matched_peer_local_port", &frp_runtime_peer_p2p_connected_data::matched_peer_local_port);
 
     rttr::registration::class_<frp_runtime_flow_transport_ready_data>(
         "network::proxy::frp_runtime_flow_transport_ready_data")

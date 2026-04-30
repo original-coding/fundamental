@@ -124,7 +124,6 @@ void frp_proxy_data_channel::enable_ssl(network_client_ssl_config config) {
 void frp_proxy_data_channel::set_on_connected(connected_callback_t cb)           { on_connected_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_disconnected(disconnected_callback_t cb)     { on_disconnected_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_data(data_callback_t cb)                     { on_data_ = std::move(cb); }
-void frp_proxy_data_channel::set_on_punch_succeeded(punch_succeeded_callback_t cb) { on_punch_succeeded_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_p2p_upgraded(p2p_upgraded_callback_t cb)     { on_p2p_upgraded_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_p2p_upgrade_failed(p2p_upgrade_failed_callback_t cb) { on_p2p_upgrade_failed_ = std::move(cb); }
 
@@ -240,6 +239,18 @@ void frp_proxy_data_channel::start_relay_read_loop() {
             if (!reference_.is_valid()) return;
             if (ec || bytes_read == 0) {
                 if (p2p_success_) return; // Expected after p2p switch -- relay released
+                // Peer may have completed punch and released its relay.
+                // If we have already sent confirmation probes, treat as p2p success.
+                if (confirmation_sent_ && punch_active_ && !p2p_success_) {
+                    FINFO("frp_proxy_data_channel flow_id={} relay closed during punch, treating as p2p success",
+                          flow_id_);
+                    punch_active_ = false;
+                    punch_done_ = true;
+                    p2p_success_ = true;
+                    punch_timer_.cancel();
+                    switch_to_p2p();
+                    return;
+                }
                 notify_disconnect_once();
                 return;
             }
@@ -424,35 +435,6 @@ void frp_proxy_data_channel::set_p2p_peer(const std::string& peer_host,
 // on_peer_p2p_connected()
 // ---------------------------------------------------------------------------
 
-void frp_proxy_data_channel::on_peer_p2p_connected(std::uint16_t matched_peer_local_port) {
-    if (!reference_.is_valid() || p2p_success_) return;
-
-    // If local punch hasn't fired yet, find the best punch socket by matched port.
-    // If punch_done_ is already true, p2p_socket_ was already promoted in the punch handler.
-    if (!punch_done_ && matched_peer_local_port != 0 && !punch_sockets_.empty()) {
-        for (auto& sock : punch_sockets_) {
-            if (!sock) continue;
-            std::error_code ec;
-            if (sock->local_endpoint(ec).port() == matched_peer_local_port) {
-                p2p_socket_ = std::move(sock);
-                break;
-            }
-        }
-    }
-    for (auto& sock : punch_sockets_) {
-        if (sock) { std::error_code ec; sock->close(ec); }
-    }
-    punch_sockets_.clear();
-    punch_active_ = false;
-    punch_done_   = false;
-    punch_timer_.cancel();
-    p2p_success_ = true;
-
-    FINFO("frp_proxy_data_channel flow_id={} peer_p2p_connected matched_port={} switching to p2p",
-          flow_id_, matched_peer_local_port);
-    switch_to_p2p();
-}
-
 // ---------------------------------------------------------------------------
 // switch_to_p2p()
 // ---------------------------------------------------------------------------
@@ -461,8 +443,8 @@ void frp_proxy_data_channel::switch_to_p2p() {
     relay_write_queue_.clear();
 
     // Release relay TCP connection now that P2P is active.
-    // The server has p2p_signaled=true on this flow (set on the first
-    // p2p_connected), so the relay disconnect will be handled gracefully:
+    // The server has p2p_signaled=true on this flow (set when flow_p2p_peer
+    // is sent), so the relay disconnect will be handled gracefully:
     // clear the weak_ptr only, no flow_closed sent to the peer.
     if (relay_upstream_) {
         relay_upstream_->release_obj();
@@ -561,31 +543,51 @@ void frp_proxy_data_channel::start_udp_punch() {
                     (const std::error_code& ec, std::size_t bytes) mutable {
                         if (!reference_.is_valid()) return;
                         if (!ec && bytes == 6 && punch_active_ && !p2p_success_ && !punch_done_) {
-                            std::uint32_t pkt_fid = 0;
-                            std::memcpy(&pkt_fid, recv_buf->data(), 4);
-                            std::uint16_t peer_lp = 0;
-                            std::memcpy(&peer_lp, recv_buf->data() + 4, 2);
-                            if (pkt_fid == flow_id_) {
-                                for (auto& s : punch_sockets_) {
-                                    if (s.get() == punch_sock_ptr) {
-                                        p2p_socket_ = std::move(s);
-                                        break;
+                            std::uint16_t pkt_fid = 0;
+                            std::memcpy(&pkt_fid, recv_buf->data(), 2);
+                            std::uint16_t src_port = 0;
+                            std::memcpy(&src_port, recv_buf->data() + 2, 2);
+                            std::uint16_t reflected = 0;
+                            std::memcpy(&reflected, recv_buf->data() + 4, 2);
+                            if (pkt_fid == (flow_id_ & 0xFFFF)) {
+                                // Immediately reply with correct peer_port
+                                std::error_code lec;
+                                std::uint16_t my_port = punch_sock_ptr->local_endpoint(lec).port();
+                                if (!lec) {
+                                    auto reply = std::make_shared<std::array<std::uint8_t, 6>>();
+                                    std::memcpy(reply->data(), &pkt_fid, 2);
+                                    std::memcpy(reply->data() + 2, &my_port, 2);
+                                    std::memcpy(reply->data() + 4, &src_port, 2);
+                                    punch_sock_ptr->async_send_to(asio::buffer(*reply), *recv_ep,
+                                        [reply](const std::error_code&, std::size_t) {});
+                                    confirmation_sent_ = true;
+                                }
+                                if (reflected == my_port) {
+                                    punch_match_count_++;
+                                    FINFO("frp_proxy_data_channel flow_id={} punch match {}/2 src={} reflected={}",
+                                          flow_id_, punch_match_count_, src_port, reflected);
+                                    if (punch_match_count_ >= 2) {
+                                        for (auto& s : punch_sockets_) {
+                                            if (s.get() == punch_sock_ptr) {
+                                                p2p_socket_ = std::move(s);
+                                                break;
+                                            }
+                                        }
+                                        for (auto& s : punch_sockets_) {
+                                            if (s) { std::error_code ce; s->close(ce); }
+                                        }
+                                        punch_sockets_.clear();
+                                        punch_active_ = false;
+                                        punch_done_ = true;
+                                        p2p_success_ = true;
+                                        p2p_peer_endpoint_ = *recv_ep;
+                                        punch_timer_.cancel();
+                                        FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (symmetric) matches={}",
+                                              flow_id_, punch_match_count_);
+                                        switch_to_p2p();
+                                        return;
                                     }
                                 }
-                                for (auto& s : punch_sockets_) {
-                                    if (s) { std::error_code ce; s->close(ce); }
-                                }
-                                punch_sockets_.clear();
-                                punch_active_ = false;
-                                punch_timer_.cancel();
-                                punch_done_ = true;
-                                p2p_peer_endpoint_ = *recv_ep;
-                                FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (symmetric) peer_lp={}",
-                                      flow_id_, peer_lp);
-                                // Notify agent to send p2p_connected to server.
-                                // switch_to_p2p() is called later via on_peer_p2p_connected().
-                                if (on_punch_succeeded_) on_punch_succeeded_(peer_lp);
-                                return;
                             }
                         }
                         if (punch_active_ && !p2p_success_ && !punch_done_) (*do_recv)();
@@ -660,7 +662,8 @@ void frp_proxy_data_channel::do_punch_round() {
         }
         (*retransmit_index)++;
 
-        std::uint32_t fid = flow_id_;
+        std::uint16_t fid = static_cast<std::uint16_t>(flow_id_ & 0xFFFF);
+        std::uint16_t zero_port = 0;
         if (i_am_symmetric) {
             std::vector<asio::ip::udp::socket*> socks;
             for (auto& sock : punch_sockets_) {
@@ -672,8 +675,9 @@ void frp_proxy_data_channel::do_punch_round() {
                 std::uint16_t lp = sock->local_endpoint(ec).port();
                 if (ec) continue;
                 auto pkt = std::make_shared<std::array<std::uint8_t, 6>>();
-                std::memcpy(pkt->data(), &fid, 4);
-                std::memcpy(pkt->data() + 4, &lp, 2);
+                std::memcpy(pkt->data(), &fid, 2);
+                std::memcpy(pkt->data() + 2, &lp, 2);
+                std::memcpy(pkt->data() + 4, &zero_port, 2);
                 sock->async_send_to(asio::buffer(*pkt), targets[0],
                                     [pkt](const std::error_code&, std::size_t) {});
             }
@@ -682,8 +686,9 @@ void frp_proxy_data_channel::do_punch_round() {
             { std::error_code ec; lp = p2p_socket_->local_endpoint(ec).port(); }
             for (const auto& tgt : targets) {
                 auto pkt = std::make_shared<std::array<std::uint8_t, 6>>();
-                std::memcpy(pkt->data(), &fid, 4);
-                std::memcpy(pkt->data() + 4, &lp, 2);
+                std::memcpy(pkt->data(), &fid, 2);
+                std::memcpy(pkt->data() + 2, &lp, 2);
+                std::memcpy(pkt->data() + 4, &zero_port, 2);
                 p2p_socket_->async_send_to(asio::buffer(*pkt), tgt,
                                            [pkt](const std::error_code&, std::size_t) {});
             }
@@ -720,42 +725,49 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                 return;
             }
 
-            // 6-byte punch probe -- accept both when we are actively punching
-            // and when the peer punches us first (before we received flow_p2p_peer)
+            // 6-byte punch probe: [uint16 flow_id][uint16 src_port][uint16 reflected_port]
             if (bytes_read == 6) {
-                std::uint32_t pkt_fid = 0;
-                std::memcpy(&pkt_fid, p2p_read_buf_.data(), 4);
-                std::uint16_t peer_lp = 0;
-                std::memcpy(&peer_lp, p2p_read_buf_.data() + 4, 2);
-                if (pkt_fid == flow_id_) {
-                    if (punch_active_ && !p2p_success_ && !punch_done_) {
-                        for (auto& s : punch_sockets_) {
-                            if (s) { std::error_code ce; s->close(ce); }
-                        }
-                        punch_sockets_.clear();
-                        punch_active_ = false;
-                        punch_timer_.cancel();
-                        punch_done_ = true;
-                        FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (full recv) peer_lp={}",
-                              flow_id_, peer_lp);
-                        if (on_punch_succeeded_) on_punch_succeeded_(peer_lp);
-                        start_p2p_read_loop();  // continue reading for KCP
-                        return;
+                std::uint16_t pkt_fid = 0;
+                std::memcpy(&pkt_fid, p2p_read_buf_.data(), 2);
+                std::uint16_t src_port = 0;
+                std::memcpy(&src_port, p2p_read_buf_.data() + 2, 2);
+                std::uint16_t reflected = 0;
+                std::memcpy(&reflected, p2p_read_buf_.data() + 4, 2);
+                if (pkt_fid == (flow_id_ & 0xFFFF) && punch_active_ && !p2p_success_ && !punch_done_) {
+                    // Immediately reply with correct peer_port
+                    std::error_code lec;
+                    std::uint16_t my_port = p2p_socket_->local_endpoint(lec).port();
+                    if (!lec) {
+                        auto reply = std::make_shared<std::array<std::uint8_t, 6>>();
+                        std::memcpy(reply->data(), &pkt_fid, 2);
+                        std::memcpy(reply->data() + 2, &my_port, 2);
+                        std::memcpy(reply->data() + 4, &src_port, 2);
+                        p2p_socket_->async_send_to(asio::buffer(*reply), p2p_recv_endpoint_,
+                            [reply](const std::error_code&, std::size_t) {});
+                        confirmation_sent_ = true;
                     }
-                    // Peer punched us before we started punching (or after local punch done).
-                    // Accept the punch and reply: set peer endpoint from the received packet
-                    // and trigger punch succeeded so the agent can send p2p_connected.
-                    if (upgrade_started_ && !p2p_success_ && !punch_done_) {
-                        p2p_peer_endpoint_ = p2p_recv_endpoint_;
-                        FINFO("frp_proxy_data_channel flow_id={} udp_punch accepted (peer-initiated) peer_lp={} peer={}:{}",
-                              flow_id_, peer_lp,
-                              p2p_peer_endpoint_.address().to_string(), p2p_peer_endpoint_.port());
-                        if (on_punch_succeeded_) on_punch_succeeded_(peer_lp);
-                        start_p2p_read_loop();  // continue reading for KCP
-                        return;
+                    if (reflected == my_port) {
+                        punch_match_count_++;
+                        FINFO("frp_proxy_data_channel flow_id={} punch match {}/2 src={} reflected={}",
+                              flow_id_, punch_match_count_, src_port, reflected);
+                        if (punch_match_count_ >= 2) {
+                            for (auto& s : punch_sockets_) {
+                                if (s) { std::error_code ce; s->close(ce); }
+                            }
+                            punch_sockets_.clear();
+                            punch_active_ = false;
+                            punch_done_ = true;
+                            p2p_success_ = true;
+                            p2p_peer_endpoint_ = p2p_recv_endpoint_;
+                            punch_timer_.cancel();
+                            FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (full) matches={}",
+                                  flow_id_, punch_match_count_);
+                            switch_to_p2p();
+                            return;
+                        }
                     }
                 }
-                start_p2p_read_loop();
+                start_p2p_read_loop();  // continue reading for KCP data
                 return;
             }
 
