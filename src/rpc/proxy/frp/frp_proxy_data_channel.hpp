@@ -155,8 +155,7 @@ private:
     std::unique_ptr<ikcpcb, kcp_releaser> kcp_;
     asio::steady_timer kcp_update_timer_;
     send_context kcp_send_ctx_;
-    std::vector<std::uint8_t> udp_send_key_;
-    std::vector<std::uint8_t> udp_recv_key_;
+    std::vector<std::uint8_t> kcp_traffic_key_;
 
     // UDP / punch
     std::unique_ptr<asio::ip::udp::socket> p2p_socket_;

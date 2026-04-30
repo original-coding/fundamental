@@ -2,7 +2,7 @@
 
 #include "frp_proxy_data_channel.hpp"
 #include "frp_runtime_common.hpp"
-#include "frp_udp_crypto.hpp"
+#include "frp_kcp_crypto.hpp"
 #include "fundamental/basic/base64_utils.hpp"
 
 #include <algorithm>
@@ -375,8 +375,7 @@ void run_startup_probe(const asio::any_io_executor& executor,
     struct probe_state {
         std::unique_ptr<asio::ip::udp::socket> socket;
         asio::steady_timer timer;
-        std::vector<std::uint8_t> send_key;
-        std::vector<std::uint8_t> recv_key;
+        std::vector<std::uint8_t> traffic_key;
         std::array<char, 2048> recv_buf {};
         asio::ip::udp::endpoint recv_endpoint;
         std::string result1;
@@ -398,8 +397,7 @@ void run_startup_probe(const asio::any_io_executor& executor,
     state->public_server_host = public_server_host;
     state->udp_ports = udp_ports;
     state->traffic_secret = traffic_secret;
-    state->send_key = frp_derive_traffic_key(traffic_secret);
-    state->recv_key = frp_derive_traffic_key(traffic_secret);
+    state->traffic_key = frp_derive_kcp_flow_key(traffic_secret, 0);
 
     std::error_code ec;
     state->socket->open(asio::ip::udp::v4(), ec);
@@ -429,7 +427,7 @@ void run_startup_probe(const asio::any_io_executor& executor,
                     FINFO("startup_probe recv bytes={} from={}:{}", bytes_read,
                           state->recv_endpoint.address().to_string(), state->recv_endpoint.port());
                     std::vector<std::uint8_t> encrypted(state->recv_buf.data(), state->recv_buf.data() + bytes_read);
-                    auto plaintext = frp_udp_decrypt(state->recv_key, encrypted);
+                    auto plaintext = frp_kcp_decrypt(state->traffic_key, encrypted);
                     if (plaintext) {
                         std::string payload(plaintext->begin(), plaintext->end());
                         FINFO("startup_probe decrypted payload_size={} payload={}", plaintext->size(), payload);
@@ -498,7 +496,7 @@ void run_startup_probe(const asio::any_io_executor& executor,
         probe.local_ip   = "";
         probe.local_port = local_port;
         auto payload = Fundamental::io::to_json(probe);
-        auto encrypted = frp_udp_encrypt_string(state->send_key, payload);
+        auto encrypted = frp_kcp_encrypt_string(state->traffic_key, payload);
         if (encrypted.empty()) {
             state->done = true;
             state->on_done(frp_runtime_nat_type_disabled);

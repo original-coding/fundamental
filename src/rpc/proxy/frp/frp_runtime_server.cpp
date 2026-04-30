@@ -1,7 +1,7 @@
 #include "frp_runtime_server.hpp"
 
 #include "frp_runtime_common.hpp"
-#include "frp_udp_crypto.hpp"
+#include "frp_kcp_crypto.hpp"
 
 namespace network::proxy
 {
@@ -52,9 +52,9 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                       server->remote_endpoint.address().to_string(), server->remote_endpoint.port());
                 std::vector<std::uint8_t> encrypted_packet(server->read_buf.data(), server->read_buf.data() + bytes_read);
 
-                // All UDP packets are encrypted with the shared traffic key
-                auto traffic_key = frp_derive_traffic_key(config_.traffic_secret);
-                auto plaintext = frp_udp_decrypt(traffic_key, encrypted_packet);
+                // All UDP packets are encrypted with the shared traffic key (flow_id=0)
+                auto traffic_key = frp_derive_kcp_flow_key(config_.traffic_secret, 0);
+                auto plaintext = frp_kcp_decrypt(traffic_key, encrypted_packet);
                 if (!plaintext) {
                     FINFO("udp_server failed to decrypt packet from {}:{} size={}",
                           server->remote_endpoint.address().to_string(), server->remote_endpoint.port(), bytes_read);
@@ -88,7 +88,7 @@ void frp_runtime_public_server::start_udp_receive(std::size_t index) {
                           server->remote_endpoint.address().to_string(), server->remote_endpoint.port(),
                           echo.external_ip, echo.external_port);
                     auto echo_json = Fundamental::io::to_json(echo);
-                    auto encrypted_resp = frp_udp_encrypt_string(traffic_key, echo_json);
+                    auto encrypted_resp = frp_kcp_encrypt_string(traffic_key, echo_json);
                     if (!encrypted_resp.empty()) {
                         auto resp_buf = std::make_shared<std::vector<std::uint8_t>>(std::move(encrypted_resp));
                         server->socket.async_send_to(asio::buffer(*resp_buf), server->remote_endpoint,
@@ -521,8 +521,12 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
               data.flow_id, data.uuid, data.local_ip, data.local_port,
               remote_endpoint.address().to_string(), remote_endpoint.port());
 
-        // Check NAT compatibility once both sides have signalled intent
-        if (flow.provider_p2p_upgrade_requested && flow.accessor_p2p_upgrade_requested) {
+        if (!flow.provider_probe.ready || !flow.accessor_probe.ready) {
+            return true;
+        }
+
+        // Check NAT compatibility before coordinating P2P — both sides must be p2p-capable
+        {
             auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
             auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
             if (provider_it != providers_by_uuid_.end() && accessor_it != accessors_by_uuid_.end()) {
@@ -530,13 +534,11 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
                 std::uint8_t a_nat = accessor_it->second.nat_type;
                 if (p_nat == frp_runtime_nat_type_disabled || a_nat == frp_runtime_nat_type_disabled ||
                     (p_nat == frp_runtime_nat_type_symmetric && a_nat == frp_runtime_nat_type_symmetric)) {
+                    FINFO("register_p2p_probe flow_id={} p2p not viable provider_nat={} accessor_nat={}",
+                          data.flow_id, static_cast<int>(p_nat), static_cast<int>(a_nat));
                     return true; // p2p not viable, probe recorded but no coordination
                 }
             }
-        }
-
-        if (!flow.provider_probe.ready || !flow.accessor_probe.ready) {
-            return true;
         }
         both_ready = true;
 

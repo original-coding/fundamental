@@ -2,7 +2,7 @@
 
 #include "frp_runtime_command.hpp"
 #include "frp_runtime_common.hpp"
-#include "frp_udp_crypto.hpp"
+#include "frp_kcp_crypto.hpp"
 #include "network/rudp/kcp_imp/ikcp.h"
 #include "network/network.hpp"
 
@@ -165,9 +165,8 @@ std::string frp_proxy_data_channel::local_p2p_endpoint() const {
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::start() {
-    // Derive KCP encryption keys
-    udp_send_key_ = frp_derive_traffic_key(traffic_secret_);
-    udp_recv_key_ = frp_derive_traffic_key(traffic_secret_);
+    // Derive symmetric KCP encryption key (both sides use the same key for this flow)
+    kcp_traffic_key_ = frp_derive_kcp_flow_key(traffic_secret_, flow_id_);
 
     // Create KCP instance (output → relay initially via kcp_output_callback)
     kcp_ = std::unique_ptr<ikcpcb, kcp_releaser>(ikcp_create(flow_id_, &kcp_send_ctx_));
@@ -219,7 +218,7 @@ void frp_proxy_data_channel::send_bytes(const char* data, std::size_t size) {
 
 void frp_proxy_data_channel::kcp_send_raw(const char* data, std::size_t size) {
     if (!kcp_) return;
-    auto encrypted = frp_udp_encrypt(udp_send_key_,
+    auto encrypted = frp_kcp_encrypt(kcp_traffic_key_,
                                      std::vector<std::uint8_t>(data, data + size));
     if (encrypted.empty()) return;
     ikcp_send(kcp_.get(), reinterpret_cast<const char*>(encrypted.data()),
@@ -306,7 +305,7 @@ void frp_proxy_data_channel::kcp_recv_loop() {
         auto n = ikcp_recv(kcp_.get(), buf.data(), static_cast<int>(buf.size()));
         if (n < 0) break;
         std::vector<std::uint8_t> encrypted(buf.data(), buf.data() + n);
-        auto plaintext = frp_udp_decrypt(udp_recv_key_, encrypted);
+        auto plaintext = frp_kcp_decrypt(kcp_traffic_key_, encrypted);
         if (!plaintext) {
             FINFO("frp_proxy_data_channel flow_id={} kcp_recv decrypt failed size={}", flow_id_, n);
             continue;
@@ -360,7 +359,7 @@ void frp_proxy_data_channel::do_endpoint_probe() {
     probe.local_ip   = "";
     probe.local_port = local_port;
     auto payload   = Fundamental::io::to_json(probe);
-    auto encrypted = frp_udp_encrypt_string(udp_send_key_, payload);
+    auto encrypted = frp_kcp_encrypt_string(frp_derive_kcp_flow_key(traffic_secret_, 0), payload);
     if (encrypted.empty()) {
         if (on_p2p_upgrade_failed_) on_p2p_upgrade_failed_();
         return;
@@ -410,6 +409,13 @@ void frp_proxy_data_channel::set_p2p_peer(const std::string& peer_host,
 
     FINFO("frp_proxy_data_channel flow_id={} set_p2p_peer peer={}:{} peer_nat_type={}",
           flow_id_, peer_host, peer_port, static_cast<int>(peer_nat_type));
+
+    if (peer_nat_type == frp_runtime_nat_type_disabled || my_nat_type_ == frp_runtime_nat_type_disabled) {
+        FINFO("frp_proxy_data_channel flow_id={} set_p2p_peer p2p not viable peer_nat={} my_nat={}",
+              flow_id_, static_cast<int>(peer_nat_type), static_cast<int>(my_nat_type_));
+        if (on_p2p_upgrade_failed_) on_p2p_upgrade_failed_();
+        return;
+    }
     start_udp_punch();
 }
 
@@ -475,6 +481,7 @@ void frp_proxy_data_channel::switch_to_p2p() {
 
 void frp_proxy_data_channel::start_udp_punch() {
     if (!reference_.is_valid() || p2p_success_ || !p2p_socket_) return;
+    if (my_nat_type_ == frp_runtime_nat_type_disabled || peer_nat_type_ == frp_runtime_nat_type_disabled) return;
 
     const bool i_am_symmetric = (my_nat_type_ == frp_runtime_nat_type_symmetric);
     std::mt19937 rng(std::random_device{}());
