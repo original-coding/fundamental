@@ -248,6 +248,10 @@ void frp_proxy_data_channel::start_relay_read_loop() {
                     punch_done_ = true;
                     p2p_success_ = true;
                     punch_timer_.cancel();
+                    for (auto& s : punch_sockets_) {
+                        if (s) { std::error_code ce; s->close(ce); }
+                    }
+                    punch_sockets_.clear();
                     switch_to_p2p();
                     return;
                 }
@@ -439,6 +443,12 @@ void frp_proxy_data_channel::set_p2p_peer(const std::string& peer_host,
 void frp_proxy_data_channel::switch_to_p2p() {
     relay_write_queue_.clear();
 
+    // Close any remaining punch sockets (safety net for all success paths)
+    for (auto& s : punch_sockets_) {
+        if (s) { std::error_code ce; s->close(ce); }
+    }
+    punch_sockets_.clear();
+
     // Release relay TCP connection now that P2P is active.
     // The server has p2p_signaled=true on this flow (set when flow_p2p_peer
     // is sent), so the relay disconnect will be handled gracefully:
@@ -606,6 +616,10 @@ void frp_proxy_data_channel::do_punch_round() {
     if (punch_round_ >= max_rounds) {
         FINFO("frp_proxy_data_channel flow_id={} udp_punch all rounds exhausted", flow_id_);
         punch_active_ = false;
+        for (auto& s : punch_sockets_) {
+            if (s) { std::error_code ce; s->close(ce); }
+        }
+        punch_sockets_.clear();
         if (on_p2p_upgrade_failed_) on_p2p_upgrade_failed_();
         return;
     }
