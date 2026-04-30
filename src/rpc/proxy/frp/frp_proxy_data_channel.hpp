@@ -116,6 +116,7 @@ private:
 
     // --- p2p switch ---
     void switch_to_p2p();
+    void schedule_p2p_keepalive();
 
     // --- helpers ---
     static std::int32_t kcp_output_callback(const char* buf, int len, ikcpcb*, void* user);
