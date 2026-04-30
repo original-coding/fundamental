@@ -42,7 +42,7 @@
 
 ### 前提
 
-- 至少一侧 `enable_p2p=false`
+- 至少一侧 `nat_type=disabled`
 
 ### 通过标准
 
@@ -70,8 +70,8 @@ bash src/rpc/proxy/frp/verify-relay-local.sh
 
 ### 前提
 
-- `provider.enable_p2p=true`
-- `accessor.enable_p2p=true`
+- `provider.nat_type != disabled`
+- `accessor.nat_type != disabled`
 - 双方 startup probe 成功
 
 ### 通过标准
@@ -80,7 +80,7 @@ bash src/rpc/proxy/frp/verify-relay-local.sh
 
 1. 建链结果正确
    - 出现 startup `udp echo probe` 结果日志
-   - 出现 `low_ttl_probe` 成功日志
+   - 出现 `udp_punch` 成功日志
    - 实际 transport 为 `p2p`
    - 出现统一格式的建立成功日志：
      - `transport`

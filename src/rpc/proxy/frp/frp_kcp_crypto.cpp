@@ -70,36 +70,31 @@ std::vector<std::uint8_t> frp_kcp_encrypt(
         return {};
     }
 
-    // Generate random nonce
-    std::vector<std::uint8_t> nonce(FRP_KCP_NONCE_SIZE);
-    if (RAND_bytes(nonce.data(), nonce.size()) != 1) {
+    // Generate random IV
+    std::vector<std::uint8_t> iv(FRP_KCP_IV_SIZE);
+    if (RAND_bytes(iv.data(), iv.size()) != 1) {
         FERR("frp_kcp_encrypt: RAND_bytes failed");
         return {};
     }
 
-    // Create cipher context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         FERR("frp_kcp_encrypt: EVP_CIPHER_CTX_new failed");
         return {};
     }
 
-    // Initialize encryption with ChaCha20-Poly1305
-    if (EVP_EncryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr,
-            key.data(), nonce.data()) != 1) {
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), nullptr,
+            key.data(), iv.data()) != 1) {
         FERR("frp_kcp_encrypt: EVP_EncryptInit_ex failed");
         EVP_CIPHER_CTX_free(ctx);
         return {};
     }
 
-    // Prepare output buffer: nonce + ciphertext + tag
+    // Output: IV + ciphertext
     std::vector<std::uint8_t> output;
-    output.reserve(FRP_KCP_NONCE_SIZE + plaintext.size() + FRP_KCP_TAG_SIZE);
+    output.reserve(FRP_KCP_IV_SIZE + plaintext.size());
+    output.insert(output.end(), iv.begin(), iv.end());
 
-    // Copy nonce to output
-    output.insert(output.end(), nonce.begin(), nonce.end());
-
-    // Encrypt plaintext
     std::vector<std::uint8_t> ciphertext(plaintext.size() + EVP_CIPHER_CTX_block_size(ctx));
     int len = 0;
     if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len,
@@ -110,7 +105,6 @@ std::vector<std::uint8_t> frp_kcp_encrypt(
     }
     int ciphertext_len = len;
 
-    // Finalize encryption
     if (EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len) != 1) {
         FERR("frp_kcp_encrypt: EVP_EncryptFinal_ex failed");
         EVP_CIPHER_CTX_free(ctx);
@@ -118,19 +112,7 @@ std::vector<std::uint8_t> frp_kcp_encrypt(
     }
     ciphertext_len += len;
 
-    // Append ciphertext to output
     output.insert(output.end(), ciphertext.begin(), ciphertext.begin() + ciphertext_len);
-
-    // Get authentication tag
-    std::vector<std::uint8_t> tag(FRP_KCP_TAG_SIZE);
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, FRP_KCP_TAG_SIZE, tag.data()) != 1) {
-        FERR("frp_kcp_encrypt: EVP_CIPHER_CTX_ctrl GET_TAG failed");
-        EVP_CIPHER_CTX_free(ctx);
-        return {};
-    }
-
-    // Append tag to output
-    output.insert(output.end(), tag.begin(), tag.end());
 
     EVP_CIPHER_CTX_free(ctx);
     FINFO("frp_kcp_encrypt plaintext_size={} output_size={}", plaintext.size(), output.size());
@@ -146,42 +128,32 @@ std::optional<std::vector<std::uint8_t>> frp_kcp_decrypt(
         return std::nullopt;
     }
 
-    // Minimum size: nonce + tag
-    if (encrypted_packet.size() < FRP_KCP_NONCE_SIZE + FRP_KCP_TAG_SIZE) {
+    if (encrypted_packet.size() < FRP_KCP_IV_SIZE) {
         FERR("frp_kcp_decrypt: packet too small {}", encrypted_packet.size());
         return std::nullopt;
     }
 
-    // Extract nonce
-    std::vector<std::uint8_t> nonce(
+    // Extract IV
+    std::vector<std::uint8_t> iv(
         encrypted_packet.begin(),
-        encrypted_packet.begin() + FRP_KCP_NONCE_SIZE);
+        encrypted_packet.begin() + FRP_KCP_IV_SIZE);
 
-    // Extract ciphertext (between nonce and tag)
-    std::size_t ciphertext_len = encrypted_packet.size() - FRP_KCP_NONCE_SIZE - FRP_KCP_TAG_SIZE;
-    const std::uint8_t* ciphertext_ptr = encrypted_packet.data() + FRP_KCP_NONCE_SIZE;
+    const std::uint8_t* ciphertext_ptr = encrypted_packet.data() + FRP_KCP_IV_SIZE;
+    std::size_t ciphertext_len = encrypted_packet.size() - FRP_KCP_IV_SIZE;
 
-    // Extract tag
-    std::vector<std::uint8_t> tag(
-        encrypted_packet.end() - FRP_KCP_TAG_SIZE,
-        encrypted_packet.end());
-
-    // Create cipher context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         FERR("frp_kcp_decrypt: EVP_CIPHER_CTX_new failed");
         return std::nullopt;
     }
 
-    // Initialize decryption with ChaCha20-Poly1305
-    if (EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr,
-            key.data(), nonce.data()) != 1) {
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_ctr(), nullptr,
+            key.data(), iv.data()) != 1) {
         FERR("frp_kcp_decrypt: EVP_DecryptInit_ex failed");
         EVP_CIPHER_CTX_free(ctx);
         return std::nullopt;
     }
 
-    // Decrypt ciphertext
     std::vector<std::uint8_t> plaintext(ciphertext_len + EVP_CIPHER_CTX_block_size(ctx));
     int len = 0;
     if (EVP_DecryptUpdate(ctx, plaintext.data(), &len,
@@ -192,17 +164,8 @@ std::optional<std::vector<std::uint8_t>> frp_kcp_decrypt(
     }
     int plaintext_len = len;
 
-    // Set expected tag
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, FRP_KCP_TAG_SIZE,
-            const_cast<std::uint8_t*>(tag.data())) != 1) {
-        FERR("frp_kcp_decrypt: EVP_CIPHER_CTX_ctrl SET_TAG failed");
-        EVP_CIPHER_CTX_free(ctx);
-        return std::nullopt;
-    }
-
-    // Finalize decryption (verifies tag)
     if (EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len) != 1) {
-        FINFO("frp_kcp_decrypt: AEAD tag verification failed packet_size={}", encrypted_packet.size());
+        FERR("frp_kcp_decrypt: EVP_DecryptFinal_ex failed");
         EVP_CIPHER_CTX_free(ctx);
         return std::nullopt;
     }
