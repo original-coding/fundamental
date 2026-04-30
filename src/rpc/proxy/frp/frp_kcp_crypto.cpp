@@ -115,7 +115,6 @@ std::vector<std::uint8_t> frp_kcp_encrypt(
     output.insert(output.end(), ciphertext.begin(), ciphertext.begin() + ciphertext_len);
 
     EVP_CIPHER_CTX_free(ctx);
-    FINFO("frp_kcp_encrypt plaintext_size={} output_size={}", plaintext.size(), output.size());
     return output;
 }
 
@@ -173,7 +172,6 @@ std::optional<std::vector<std::uint8_t>> frp_kcp_decrypt(
 
     plaintext.resize(plaintext_len);
     EVP_CIPHER_CTX_free(ctx);
-    FINFO("frp_kcp_decrypt ok packet_size={} plaintext_size={}", encrypted_packet.size(), plaintext_len);
     return plaintext;
 }
 

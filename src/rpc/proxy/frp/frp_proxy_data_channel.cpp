@@ -318,10 +318,7 @@ void frp_proxy_data_channel::kcp_recv_loop() {
         if (n < 0) break;
         std::vector<std::uint8_t> encrypted(buf.data(), buf.data() + n);
         auto plaintext = frp_kcp_decrypt(kcp_traffic_key_, encrypted);
-        if (!plaintext) {
-            FINFO("frp_proxy_data_channel flow_id={} kcp_recv decrypt failed size={}", flow_id_, n);
-            continue;
-        }
+        if (!plaintext) continue;
         if (on_data_) {
             on_data_(std::string(reinterpret_cast<const char*>(plaintext->data()), plaintext->size()));
         }
