@@ -170,6 +170,9 @@ bool frp_runtime_public_server::bind_signal_identity(const std::shared_ptr<frp_r
             accessor.startup_rtt_ms = request.startup_rtt_ms;
             accessor.session       = session;
         }
+        FINFO("bind_signal_identity uuid={} role={} nat={} startup_rtt={}ms",
+              request.uuid, static_cast<int>(request.role),
+              static_cast<int>(request.nat_type), request.startup_rtt_ms);
     }
     if (previous_session && previous_session.get() != session.get()) {
         previous_session->release_obj();
