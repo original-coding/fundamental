@@ -832,7 +832,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             channel_->release_obj();
             return;
         }
-        // Compute RTT from echoed timestamp, report to server
+        // Compute RTT from echoed timestamp, send via p2p_upgrade_request
         if (ready.client_timestamp_ms != 0) {
             auto now_ts = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -842,11 +842,11 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             if (it_rt != flows_.end() && it_rt->second->data_channel) {
                 it_rt->second->data_channel->set_my_rtt_ms(rtt);
             }
-            frp_runtime_p2p_rtt_report_data report;
-            report.command = frp_runtime_p2p_rtt_report_command;
-            report.flow_id = ready.flow_id;
-            report.rtt_ms  = rtt;
-            channel_->send_command(report);
+            frp_runtime_p2p_upgrade_request_data rpt;
+            rpt.command = frp_runtime_p2p_upgrade_request_command;
+            rpt.flow_id = ready.flow_id;
+            rpt.rtt_ms  = rtt;
+            channel_->send_command(rpt);
         }
         return;
     }
@@ -1340,11 +1340,11 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             if (it_rt != sessions_by_flow_id_.end() && it_rt->second->data_channel) {
                 it_rt->second->data_channel->set_my_rtt_ms(rtt);
             }
-            frp_runtime_p2p_rtt_report_data report;
-            report.command = frp_runtime_p2p_rtt_report_command;
-            report.flow_id = ready.flow_id;
-            report.rtt_ms  = rtt;
-            channel_->send_command(report);
+            frp_runtime_p2p_upgrade_request_data rpt;
+            rpt.command = frp_runtime_p2p_upgrade_request_command;
+            rpt.flow_id = ready.flow_id;
+            rpt.rtt_ms  = rtt;
+            channel_->send_command(rpt);
         }
         return;
     }
