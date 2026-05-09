@@ -91,6 +91,7 @@ struct frp_runtime_accessor_agent::accessor_session_context {
     std::uint64_t session_id = 0;
     std::uint32_t flow_id = 0;
     std::string service_name;
+    std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
     asio::ip::tcp::socket local_socket;
     std::shared_ptr<frp_proxy_data_channel> data_channel;
     std::array<char, 16 * 1024> read_buf {};
@@ -1067,6 +1068,7 @@ void frp_runtime_accessor_agent::reconcile_listeners(const std::vector<frp_runti
 
         auto listener = std::make_shared<listener_runtime>(reconnect_timer_.get_executor(), listener_config.service_name,
                                                            listener_config.listen_host, listener_config.listen_port);
+        listener->provider_nat_type = service_it->second.provider_nat_type;
         std::error_code ec;
         auto address = asio::ip::make_address(listener_config.listen_host, ec);
         if (ec) {
@@ -1129,6 +1131,7 @@ void frp_runtime_accessor_agent::start_accept_loop(const std::shared_ptr<listene
                 } else {
                     auto session = std::make_shared<accessor_session_context>(next_session_id_++, std::move(socket));
                     session->service_name = listener->service_name;
+                    session->provider_nat_type = listener->provider_nat_type;
                     pending_sessions_[session->session_id] = session;
                     request_flow(session);
                 }
@@ -1288,8 +1291,9 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             session->data_channel ? session->data_channel->local_relay_endpoint() : "?",
             session->data_channel ? session->data_channel->remote_relay_endpoint() : "?");
         session->ready = true;
-        // Initiate p2p upgrade if capable
+        // Initiate p2p upgrade if both sides are capable
         if (probed_nat_type_ != frp_runtime_nat_type_disabled &&
+            session->provider_nat_type != frp_runtime_nat_type_disabled &&
             config_.public_server_udp_port != 0 && session->data_channel) {
             frp_runtime_p2p_upgrade_request_data upgrade_req;
             upgrade_req.command = frp_runtime_p2p_upgrade_request_command;

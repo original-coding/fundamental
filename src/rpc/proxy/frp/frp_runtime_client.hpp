@@ -179,6 +179,7 @@ private:
         std::string service_name;
         std::string listen_host;
         std::uint16_t listen_port = 0;
+        std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
         asio::ip::tcp::acceptor acceptor;
 
         listener_runtime(const asio::any_io_executor& executor,
