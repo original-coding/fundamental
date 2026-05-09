@@ -156,17 +156,19 @@ bool frp_runtime_public_server::bind_signal_identity(const std::shared_ptr<frp_r
         clear_session_state_locked(session);
         sessions_by_uuid_[request.uuid] = session;
         if (request.role == frp_runtime_provider_role) {
-            auto& provider       = providers_by_uuid_[request.uuid];
-            provider.uuid        = request.uuid;
-            provider.register_key = request.register_key;
-            provider.nat_type    = request.nat_type;
-            provider.session      = session;
+            auto& provider         = providers_by_uuid_[request.uuid];
+            provider.uuid          = request.uuid;
+            provider.register_key  = request.register_key;
+            provider.nat_type      = request.nat_type;
+            provider.startup_rtt_ms = request.startup_rtt_ms;
+            provider.session       = session;
         } else {
-            auto& accessor       = accessors_by_uuid_[request.uuid];
-            accessor.uuid        = request.uuid;
-            accessor.register_key = request.register_key;
-            accessor.nat_type    = request.nat_type;
-            accessor.session      = session;
+            auto& accessor         = accessors_by_uuid_[request.uuid];
+            accessor.uuid          = request.uuid;
+            accessor.register_key  = request.register_key;
+            accessor.nat_type      = request.nat_type;
+            accessor.startup_rtt_ms = request.startup_rtt_ms;
+            accessor.session       = session;
         }
     }
     if (previous_session && previous_session.get() != session.get()) {
@@ -257,6 +259,9 @@ std::vector<frp_runtime_visible_service_data> frp_runtime_public_server::list_se
             visible.service_name           = service.service_name;
             visible.provider_uuid          = service.provider_uuid;
             visible.provider_nat_type      = service.provider_nat_type;
+            if (auto pit = providers_by_uuid_.find(service.provider_uuid); pit != providers_by_uuid_.end()) {
+                visible.provider_startup_rtt_ms = pit->second.startup_rtt_ms;
+            }
             result.push_back(std::move(visible));
         }
     }
@@ -521,12 +526,10 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         current->local_ip            = data.local_ip;
         current->local_port          = data.local_port;
         current->observed_endpoint   = remote_endpoint;
-        current->client_timestamp_ms = data.client_timestamp_ms;
         current->ready               = true;
-        FINFO("register_p2p_probe flow_id={} uuid={} local_ip={} local_port={} observed={}:{} ts={}",
+        FINFO("register_p2p_probe flow_id={} uuid={} local_ip={} local_port={} observed={}:{}",
               data.flow_id, data.uuid, data.local_ip, data.local_port,
-              remote_endpoint.address().to_string(), remote_endpoint.port(),
-              data.client_timestamp_ms);
+              remote_endpoint.address().to_string(), remote_endpoint.port());
 
         if (!flow.provider_probe.ready || !flow.accessor_probe.ready) {
             return true;
@@ -575,18 +578,12 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         }
 
         // flow_endpoint_ready: each side gets its own observed external endpoint + echoed timestamp
-        provider_ep_ready.flow_id             = data.flow_id;
-        provider_ep_ready.external_ip         = flow.provider_probe.observed_endpoint.address().to_string();
-        provider_ep_ready.external_port       = flow.provider_probe.observed_endpoint.port();
-        provider_ep_ready.client_timestamp_ms = flow.provider_probe.client_timestamp_ms;
-        accessor_ep_ready.flow_id             = data.flow_id;
-        accessor_ep_ready.external_ip         = flow.accessor_probe.observed_endpoint.address().to_string();
-        accessor_ep_ready.external_port       = flow.accessor_probe.observed_endpoint.port();
-        accessor_ep_ready.client_timestamp_ms = flow.accessor_probe.client_timestamp_ms;
-
-        // flow_p2p_peer: include peer's RTT (may be 0 if not yet reported)
-        provider_peer.peer_rtt_ms = flow.accessor_rtt_ms;
-        accessor_peer.peer_rtt_ms = flow.provider_rtt_ms;
+        provider_ep_ready.flow_id       = data.flow_id;
+        provider_ep_ready.external_ip   = flow.provider_probe.observed_endpoint.address().to_string();
+        provider_ep_ready.external_port = flow.provider_probe.observed_endpoint.port();
+        accessor_ep_ready.flow_id       = data.flow_id;
+        accessor_ep_ready.external_ip   = flow.accessor_probe.observed_endpoint.address().to_string();
+        accessor_ep_ready.external_port = flow.accessor_probe.observed_endpoint.port();
 
         auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
         if (provider_it != providers_by_uuid_.end()) provider_signal_session = provider_it->second.session.lock();
@@ -595,6 +592,8 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         // peer_nat_type: each side gets the other side's nat_type
         provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
         accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
+        provider_peer.peer_startup_rtt_ms = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.startup_rtt_ms : 100U;
+        accessor_peer.peer_startup_rtt_ms = provider_it != providers_by_uuid_.end() ? provider_it->second.startup_rtt_ms : 100U;
 
         // Mark flow so release_session_state tolerates relay disconnects
         // that will happen when both sides call switch_to_p2p().
@@ -626,7 +625,6 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
     }
 
     bool both_requested = false;
-    bool rtt_update_needed = false;
     std::string provider_uuid;
     std::string accessor_uuid;
     std::uint8_t provider_nat = frp_runtime_nat_type_disabled;
@@ -657,50 +655,6 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
         }
         if (is_provider) flow.provider_p2p_upgrade_requested = true;
         if (is_accessor) flow.accessor_p2p_upgrade_requested = true;
-
-        // Store RTT if provided (client sends a second upgrade_request after computing it)
-        if (data.rtt_ms != 0) {
-            if (is_provider) flow.provider_rtt_ms = data.rtt_ms;
-            else flow.accessor_rtt_ms = data.rtt_ms;
-            FINFO("handle_p2p_upgrade_request flow_id={} {}_rtt={}ms",
-                  data.flow_id, is_provider ? "provider" : "accessor", data.rtt_ms);
-            // If probes are ready, send updated flow_p2p_peer with real peer_rtt_ms
-            if (flow.provider_probe.ready && flow.accessor_probe.ready) {
-                bool update_for_provider = !is_provider && flow.provider_rtt_ms > 0;
-                bool update_for_accessor = is_provider && flow.accessor_rtt_ms > 0;
-                if (update_for_provider || update_for_accessor) {
-                    auto provider_it = providers_by_uuid_.find(flow.provider_uuid);
-                    auto accessor_it = accessors_by_uuid_.find(flow.accessor_uuid);
-                    provider_uuid = flow.provider_uuid;
-                    accessor_uuid = flow.accessor_uuid;
-                    if (provider_it != providers_by_uuid_.end()) provider_signal_session = provider_it->second.session.lock();
-                    if (accessor_it != accessors_by_uuid_.end()) accessor_signal_session = accessor_it->second.session.lock();
-                    // Rebuild peer info with updated RTTs
-                    const bool same_ip = flow.provider_probe.observed_endpoint.address() == flow.accessor_probe.observed_endpoint.address();
-                    provider_peer.flow_id = data.flow_id;
-                    accessor_peer.flow_id = data.flow_id;
-                    if (same_ip && !flow.accessor_probe.local_ip.empty() && flow.accessor_probe.local_port != 0) {
-                        provider_peer.peer_host = flow.accessor_probe.local_ip;
-                        provider_peer.peer_port = flow.accessor_probe.local_port;
-                    } else {
-                        provider_peer.peer_host = flow.accessor_probe.observed_endpoint.address().to_string();
-                        provider_peer.peer_port = flow.accessor_probe.observed_endpoint.port();
-                    }
-                    if (same_ip && !flow.provider_probe.local_ip.empty() && flow.provider_probe.local_port != 0) {
-                        accessor_peer.peer_host = flow.provider_probe.local_ip;
-                        accessor_peer.peer_port = flow.provider_probe.local_port;
-                    } else {
-                        accessor_peer.peer_host = flow.provider_probe.observed_endpoint.address().to_string();
-                        accessor_peer.peer_port = flow.provider_probe.observed_endpoint.port();
-                    }
-                    provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
-                    accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
-                    provider_peer.peer_rtt_ms = flow.accessor_rtt_ms;
-                    accessor_peer.peer_rtt_ms = flow.provider_rtt_ms;
-                    rtt_update_needed = true;
-                }
-            }
-        }
 
         FINFO("handle_p2p_upgrade_request flow_id={} uuid={} provider_req={} accessor_req={}",
               data.flow_id, session->get_uuid(),
@@ -779,6 +733,8 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
             if (accessor_it != accessors_by_uuid_.end()) accessor_signal_session = accessor_it->second.session.lock();
             provider_peer.peer_nat_type = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
             accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
+            provider_peer.peer_startup_rtt_ms = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.startup_rtt_ms : 100U;
+            accessor_peer.peer_startup_rtt_ms = provider_it != providers_by_uuid_.end() ? provider_it->second.startup_rtt_ms : 100U;
         }
 
         if (probes_ready) {
@@ -787,11 +743,6 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
             if (provider_signal_session) provider_signal_session->send_command(provider_peer);
             if (accessor_signal_session) accessor_signal_session->send_command(accessor_peer);
         }
-    }
-    // Send updated flow_p2p_peer if RTT arrived after initial peer info
-    if (rtt_update_needed) {
-        if (provider_signal_session) provider_signal_session->send_command(provider_peer);
-        if (accessor_signal_session) accessor_signal_session->send_command(accessor_peer);
     }
     return true;
 }

@@ -179,7 +179,6 @@ private:
     bool confirmation_sent_ = false;  // we have replied with correct peer_port
     int keepalive_probe_count_ = 0;   // consecutive keepalive probes without response
     bool keepalive_probing_ = false;  // in 2s probing state (after 10s idle)
-    std::uint64_t endpoint_probe_send_ts_ = 0; // timestamp sent in endpoint probe
     std::uint32_t my_rtt_ms_ = 100;    // RTT to server, default 100ms
     std::uint32_t peer_rtt_ms_ = 100;  // peer's RTT to server, default 100ms
 

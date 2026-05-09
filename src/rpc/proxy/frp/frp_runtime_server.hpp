@@ -106,7 +106,6 @@ private:
         std::string local_ip;
         std::uint16_t local_port = 0;
         udp::endpoint observed_endpoint;
-        std::uint64_t client_timestamp_ms = 0;
         bool ready = false;
     };
 
@@ -114,6 +113,7 @@ private:
         std::string uuid;
         std::string register_key;
         std::uint8_t nat_type = frp_runtime_nat_type_disabled;
+        std::uint32_t startup_rtt_ms = 100;
         std::unordered_set<std::string> services;
         std::weak_ptr<frp_runtime_signal_session> session;
     };
@@ -122,6 +122,7 @@ private:
         std::string uuid;
         std::string register_key;
         std::uint8_t nat_type = frp_runtime_nat_type_disabled;
+        std::uint32_t startup_rtt_ms = 100;
         std::weak_ptr<frp_runtime_signal_session> session;
     };
 
@@ -139,8 +140,6 @@ private:
         // p2p upgrade: set when flow_p2p_peer is sent, tells
         // release_session_state that relay disconnects are expected
         bool p2p_signaled = false;
-        std::uint32_t provider_rtt_ms = 0;
-        std::uint32_t accessor_rtt_ms = 0;
         std::weak_ptr<frp_runtime_signal_session> provider_data_session;
         std::weak_ptr<frp_runtime_signal_session> accessor_data_session;
         p2p_probe_state provider_probe;

@@ -114,6 +114,7 @@ struct frp_runtime_join_request_data : frp_runtime_command_base {
     std::string uuid;
     std::string register_key;
     std::uint8_t nat_type = frp_runtime_nat_type_disabled;
+    std::uint32_t startup_rtt_ms = 0;
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
@@ -148,6 +149,7 @@ struct frp_runtime_visible_service_data {
     std::string service_name;
     std::string provider_uuid;
     std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
+    std::uint32_t provider_startup_rtt_ms = 100;
     virtual ~frp_runtime_visible_service_data() = default;
     RTTR_ENABLE()
 };
@@ -186,7 +188,6 @@ struct frp_runtime_p2p_probe_data : frp_runtime_command_base {
     std::string uuid;
     std::string local_ip;
     std::uint16_t local_port = 0;
-    std::uint64_t client_timestamp_ms = 0;
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
@@ -196,7 +197,7 @@ struct frp_runtime_flow_p2p_peer_data : frp_runtime_command_base {
     std::uint16_t peer_port = 0;
     bool use_local_candidate = false;
     std::uint8_t peer_nat_type = frp_runtime_nat_type_disabled;
-    std::uint32_t peer_rtt_ms = 0;
+    std::uint32_t peer_startup_rtt_ms = 0;
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
@@ -204,18 +205,16 @@ struct frp_runtime_flow_endpoint_ready_data : frp_runtime_command_base {
     std::uint32_t flow_id = 0;
     std::string external_ip;
     std::uint16_t external_port = 0;
-    std::uint64_t client_timestamp_ms = 0;
-    RTTR_ENABLE(frp_runtime_command_base)
-};
-
-struct frp_runtime_flow_transport_ready_data : frp_runtime_command_base {
-    std::uint32_t flow_id = 0;
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
 struct frp_runtime_p2p_upgrade_request_data : frp_runtime_command_base {
     std::uint32_t flow_id = 0;
-    std::uint32_t rtt_ms = 0;
+    RTTR_ENABLE(frp_runtime_command_base)
+};
+
+struct frp_runtime_flow_transport_ready_data : frp_runtime_command_base {
+    std::uint32_t flow_id = 0;
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
@@ -296,7 +295,8 @@ inline void __register_frp_runtime_reflect_type__() {
         .property("role", &frp_runtime_join_request_data::role)
         .property("uuid", &frp_runtime_join_request_data::uuid)
         .property("register_key", &frp_runtime_join_request_data::register_key)
-        .property("nat_type", &frp_runtime_join_request_data::nat_type);
+        .property("nat_type", &frp_runtime_join_request_data::nat_type)
+        .property("startup_rtt_ms", &frp_runtime_join_request_data::startup_rtt_ms);
 
     rttr::registration::class_<frp_runtime_join_response_data>("network::proxy::frp_runtime_join_response_data")
         .constructor()(rttr::policy::ctor::as_object)
@@ -327,7 +327,8 @@ inline void __register_frp_runtime_reflect_type__() {
         .constructor()(rttr::policy::ctor::as_object)
         .property("service_name", &frp_runtime_visible_service_data::service_name)
         .property("provider_uuid", &frp_runtime_visible_service_data::provider_uuid)
-        .property("provider_nat_type", &frp_runtime_visible_service_data::provider_nat_type);
+        .property("provider_nat_type", &frp_runtime_visible_service_data::provider_nat_type)
+        .property("provider_startup_rtt_ms", &frp_runtime_visible_service_data::provider_startup_rtt_ms);
 
     rttr::registration::class_<frp_runtime_fetch_services_response_data>(
         "network::proxy::frp_runtime_fetch_services_response_data")
@@ -362,8 +363,7 @@ inline void __register_frp_runtime_reflect_type__() {
         .property("flow_id", &frp_runtime_p2p_probe_data::flow_id)
         .property("uuid", &frp_runtime_p2p_probe_data::uuid)
         .property("local_ip", &frp_runtime_p2p_probe_data::local_ip)
-        .property("local_port", &frp_runtime_p2p_probe_data::local_port)
-        .property("client_timestamp_ms", &frp_runtime_p2p_probe_data::client_timestamp_ms);
+        .property("local_port", &frp_runtime_p2p_probe_data::local_port);
 
     rttr::registration::class_<frp_runtime_flow_p2p_peer_data>("network::proxy::frp_runtime_flow_p2p_peer_data")
         .constructor()(rttr::policy::ctor::as_object)
@@ -372,15 +372,14 @@ inline void __register_frp_runtime_reflect_type__() {
         .property("peer_port", &frp_runtime_flow_p2p_peer_data::peer_port)
         .property("use_local_candidate", &frp_runtime_flow_p2p_peer_data::use_local_candidate)
         .property("peer_nat_type", &frp_runtime_flow_p2p_peer_data::peer_nat_type)
-        .property("peer_rtt_ms", &frp_runtime_flow_p2p_peer_data::peer_rtt_ms);
+        .property("peer_startup_rtt_ms", &frp_runtime_flow_p2p_peer_data::peer_startup_rtt_ms);
 
     rttr::registration::class_<frp_runtime_flow_endpoint_ready_data>(
         "network::proxy::frp_runtime_flow_endpoint_ready_data")
         .constructor()(rttr::policy::ctor::as_object)
         .property("flow_id", &frp_runtime_flow_endpoint_ready_data::flow_id)
         .property("external_ip", &frp_runtime_flow_endpoint_ready_data::external_ip)
-        .property("external_port", &frp_runtime_flow_endpoint_ready_data::external_port)
-        .property("client_timestamp_ms", &frp_runtime_flow_endpoint_ready_data::client_timestamp_ms);
+        .property("external_port", &frp_runtime_flow_endpoint_ready_data::external_port);
 
     rttr::registration::class_<frp_runtime_flow_transport_ready_data>(
         "network::proxy::frp_runtime_flow_transport_ready_data")
@@ -390,8 +389,7 @@ inline void __register_frp_runtime_reflect_type__() {
     rttr::registration::class_<frp_runtime_p2p_upgrade_request_data>(
         "network::proxy::frp_runtime_p2p_upgrade_request_data")
         .constructor()(rttr::policy::ctor::as_object)
-        .property("flow_id", &frp_runtime_p2p_upgrade_request_data::flow_id)
-        .property("rtt_ms", &frp_runtime_p2p_upgrade_request_data::rtt_ms);
+        .property("flow_id", &frp_runtime_p2p_upgrade_request_data::flow_id);
 
     rttr::registration::class_<frp_runtime_flow_ready_data>("network::proxy::frp_runtime_flow_ready_data")
         .constructor()(rttr::policy::ctor::as_object)

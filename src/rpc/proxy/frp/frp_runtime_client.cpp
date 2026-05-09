@@ -92,6 +92,7 @@ struct frp_runtime_accessor_agent::accessor_session_context {
     std::uint32_t flow_id = 0;
     std::string service_name;
     std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
+    std::uint32_t provider_startup_rtt_ms = 100;
     asio::ip::tcp::socket local_socket;
     std::shared_ptr<frp_proxy_data_channel> data_channel;
     std::array<char, 16 * 1024> read_buf {};
@@ -367,9 +368,9 @@ void run_startup_probe(const asio::any_io_executor& executor,
                        const std::string& traffic_secret,
                        const std::string& public_server_host,
                        const std::vector<std::uint16_t>& udp_ports,
-                       std::function<void(frp_runtime_nat_type)> on_done) {
+                       std::function<void(frp_runtime_nat_type, std::uint32_t rtt_ms)> on_done) {
     if (udp_ports.empty()) {
-        on_done(frp_runtime_nat_type_disabled);
+        on_done(frp_runtime_nat_type_disabled, 0);
         return;
     }
 
@@ -384,7 +385,9 @@ void run_startup_probe(const asio::any_io_executor& executor,
         std::size_t port_index = 0;
         std::size_t attempts = 0;
         bool done = false;
-        std::function<void(frp_runtime_nat_type)> on_done;
+        std::function<void(frp_runtime_nat_type, std::uint32_t)> on_done;
+        std::uint32_t rtt_ms = 0;
+        std::uint64_t send_timestamp = 0;
         std::string public_server_host;
         std::vector<std::uint16_t> udp_ports;
         std::string traffic_secret;
@@ -404,13 +407,13 @@ void run_startup_probe(const asio::any_io_executor& executor,
     state->socket->open(asio::ip::udp::v4(), ec);
     if (ec) {
         FINFO("startup_probe socket open failed err={}", ec.message());
-        state->on_done(frp_runtime_nat_type_disabled);
+        state->on_done(frp_runtime_nat_type_disabled, 0);
         return;
     }
     state->socket->bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 0), ec);
     if (ec) {
         FINFO("startup_probe socket bind failed err={}", ec.message());
-        state->on_done(frp_runtime_nat_type_disabled);
+        state->on_done(frp_runtime_nat_type_disabled, 0);
         return;
     }
     FINFO("startup_probe socket bound local_port={}", state->socket->local_endpoint(ec).port());
@@ -435,8 +438,14 @@ void run_startup_probe(const asio::any_io_executor& executor,
                         frp_runtime_flow_endpoint_ready_data echo;
                         if (Fundamental::io::from_json(payload, echo) && echo.flow_id == 0 && !echo.external_ip.empty()) {
                             state->timer.cancel();
+                            auto now_ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count();
+                            if (state->send_timestamp > 0 && now_ts > state->send_timestamp) {
+                                state->rtt_ms = static_cast<std::uint32_t>(now_ts - state->send_timestamp);
+                            }
                             auto result = Fundamental::StringFormat("{}:{}", echo.external_ip, echo.external_port);
-                            FINFO("startup_probe port_index={} received echo external={}", state->port_index, result);
+                            FINFO("startup_probe port_index={} received echo external={} rtt={}ms",
+                                  state->port_index, result, state->rtt_ms);
                             if (state->port_index == 0) {
                                 state->result1 = result;
                             } else {
@@ -456,7 +465,7 @@ void run_startup_probe(const asio::any_io_executor& executor,
                                 }
                                 FINFO("startup_probe probe_result_1={} probe_result_2={} detected_nat_type={}",
                                       state->result1, state->result2, static_cast<int>(detected));
-                                state->on_done(detected);
+                                state->on_done(detected, state->rtt_ms);
                                 return;
                             }
                             (*do_probe)();
@@ -478,14 +487,14 @@ void run_startup_probe(const asio::any_io_executor& executor,
             state->done = true;
             FINFO("startup_probe probe_result_1={} probe_result_2={} p2p_probe_result=failed (timeout)",
                   state->result1, state->result2);
-            state->on_done(frp_runtime_nat_type_disabled);
+            state->on_done(frp_runtime_nat_type_disabled, state->rtt_ms);
             return;
         }
         auto server_endpoint = resolve_udp_endpoint(state->executor, state->public_server_host,
                                                     state->udp_ports[state->port_index]);
         if (!server_endpoint) {
             state->done = true;
-            state->on_done(frp_runtime_nat_type_disabled);
+            state->on_done(frp_runtime_nat_type_disabled, state->rtt_ms);
             return;
         }
         std::error_code local_ec;
@@ -500,10 +509,12 @@ void run_startup_probe(const asio::any_io_executor& executor,
         auto encrypted = frp_kcp_encrypt_string(state->traffic_key, payload);
         if (encrypted.empty()) {
             state->done = true;
-            state->on_done(frp_runtime_nat_type_disabled);
+            state->on_done(frp_runtime_nat_type_disabled, state->rtt_ms);
             return;
         }
         state->attempts++;
+        state->send_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
         FINFO("startup_probe send attempt={} port_index={} local_port={} server={}:{} probe_size={}",
               state->attempts, state->port_index, local_port,
               server_endpoint->address().to_string(), server_endpoint->port(), encrypted.size());
@@ -534,9 +545,10 @@ void frp_runtime_provider_agent::start() {
         run_startup_probe(reconnect_timer_.get_executor(), config_.traffic_secret, config_.public_server_host,
                           { config_.public_server_udp_port,
                             static_cast<std::uint16_t>(config_.public_server_udp_port + 1) },
-                          [this, self = shared_from_this()](frp_runtime_nat_type detected) {
+                          [this, self = shared_from_this()](frp_runtime_nat_type detected, std::uint32_t rtt_ms) {
                               if (!reference_.is_valid()) return;
                               probed_nat_type_ = detected;
+                              startup_rtt_ms_ = rtt_ms;
                               connect_signal_channel();
                           });
     } else {
@@ -654,13 +666,11 @@ void frp_runtime_provider_agent::start_provider_backend_connect(const std::share
                     ready_signal.command = frp_runtime_flow_ready_command;
                     ready_signal.flow_id = flow->flow_id;
                     channel_->send_command(ready_signal);
-                    // Initiate p2p upgrade if capable
+                    // Start endpoint probe for P2P if capable.
+                    // The probe itself registers as implicit upgrade_request with the server.
                     if (probed_nat_type_ != frp_runtime_nat_type_disabled &&
                         config_.public_server_udp_port != 0 && flow->data_channel) {
-                        frp_runtime_p2p_upgrade_request_data upgrade_req;
-                        upgrade_req.command = frp_runtime_p2p_upgrade_request_command;
-                        upgrade_req.flow_id = flow->flow_id;
-                        channel_->send_command(upgrade_req);
+                        flow->data_channel->set_my_rtt_ms(startup_rtt_ms_);
                         flow->data_channel->start_p2p_upgrade();
                     }
                     start_backend_read_loop(flow);
@@ -701,6 +711,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
                          probed_nat_type_ != frp_runtime_nat_type_disabled)
                             ? probed_nat_type_
                             : frp_runtime_nat_type_disabled;
+        join.startup_rtt_ms = startup_rtt_ms_;
         channel_->send_command(join);
         return;
     }
@@ -827,27 +838,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         return;
     }
     case frp_runtime_flow_endpoint_ready_command: {
-        frp_runtime_flow_endpoint_ready_data ready;
-        if (!Fundamental::io::from_json(payload, ready)) {
-            channel_->release_obj();
-            return;
-        }
-        // Compute RTT from echoed timestamp, send via p2p_upgrade_request
-        if (ready.client_timestamp_ms != 0) {
-            auto now_ts = static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
-            auto rtt = static_cast<std::uint32_t>(now_ts - ready.client_timestamp_ms);
-            auto it_rt = flows_.find(ready.flow_id);
-            if (it_rt != flows_.end() && it_rt->second->data_channel) {
-                it_rt->second->data_channel->set_my_rtt_ms(rtt);
-            }
-            frp_runtime_p2p_upgrade_request_data rpt;
-            rpt.command = frp_runtime_p2p_upgrade_request_command;
-            rpt.flow_id = ready.flow_id;
-            rpt.rtt_ms  = rtt;
-            channel_->send_command(rpt);
-        }
+        // Handled internally by frp_proxy_data_channel -- ignore here
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {
@@ -862,8 +853,8 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         if (!flow->data_channel) return;
         FINFO("provider flow {} flow_p2p_peer peer={}:{} peer_nat_type={} peer_rtt={}ms",
               flow->flow_id, peer.peer_host, peer.peer_port,
-              static_cast<int>(peer.peer_nat_type), peer.peer_rtt_ms);
-        flow->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type, peer.peer_rtt_ms);
+              static_cast<int>(peer.peer_nat_type), peer.peer_startup_rtt_ms);
+        flow->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type, peer.peer_startup_rtt_ms);
         return;
     }
     case frp_runtime_flow_data_command: {
@@ -989,9 +980,10 @@ void frp_runtime_accessor_agent::start() {
         run_startup_probe(reconnect_timer_.get_executor(), config_.traffic_secret, config_.public_server_host,
                           { config_.public_server_udp_port,
                             static_cast<std::uint16_t>(config_.public_server_udp_port + 1) },
-                          [this, self = shared_from_this()](frp_runtime_nat_type detected) {
+                          [this, self = shared_from_this()](frp_runtime_nat_type detected, std::uint32_t rtt_ms) {
                               if (!reference_.is_valid()) return;
                               probed_nat_type_ = detected;
+                              startup_rtt_ms_ = rtt_ms;
                               connect_signal_channel();
                           });
     } else {
@@ -1090,6 +1082,7 @@ void frp_runtime_accessor_agent::reconcile_listeners(const std::vector<frp_runti
         auto listener = std::make_shared<listener_runtime>(reconnect_timer_.get_executor(), listener_config.service_name,
                                                            listener_config.listen_host, listener_config.listen_port);
         listener->provider_nat_type = service_it->second.provider_nat_type;
+        listener->provider_startup_rtt_ms = service_it->second.provider_startup_rtt_ms;
         std::error_code ec;
         auto address = asio::ip::make_address(listener_config.listen_host, ec);
         if (ec) {
@@ -1153,6 +1146,7 @@ void frp_runtime_accessor_agent::start_accept_loop(const std::shared_ptr<listene
                     auto session = std::make_shared<accessor_session_context>(next_session_id_++, std::move(socket));
                     session->service_name = listener->service_name;
                     session->provider_nat_type = listener->provider_nat_type;
+                    session->provider_startup_rtt_ms = listener->provider_startup_rtt_ms;
                     pending_sessions_[session->session_id] = session;
                     request_flow(session);
                 }
@@ -1203,6 +1197,7 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
                          probed_nat_type_ != frp_runtime_nat_type_disabled)
                             ? probed_nat_type_
                             : frp_runtime_nat_type_disabled;
+        join.startup_rtt_ms = startup_rtt_ms_;
         channel_->send_command(join);
         return;
     }
@@ -1320,32 +1315,14 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             upgrade_req.command = frp_runtime_p2p_upgrade_request_command;
             upgrade_req.flow_id = session->flow_id;
             channel_->send_command(upgrade_req);
+            session->data_channel->set_my_rtt_ms(startup_rtt_ms_);
             session->data_channel->start_p2p_upgrade();
         }
         start_local_read_loop(session);
         return;
     }
     case frp_runtime_flow_endpoint_ready_command: {
-        frp_runtime_flow_endpoint_ready_data ready;
-        if (!Fundamental::io::from_json(payload, ready)) {
-            channel_->release_obj();
-            return;
-        }
-        if (ready.client_timestamp_ms != 0) {
-            auto now_ts = static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
-            auto rtt = static_cast<std::uint32_t>(now_ts - ready.client_timestamp_ms);
-            auto it_rt = sessions_by_flow_id_.find(ready.flow_id);
-            if (it_rt != sessions_by_flow_id_.end() && it_rt->second->data_channel) {
-                it_rt->second->data_channel->set_my_rtt_ms(rtt);
-            }
-            frp_runtime_p2p_upgrade_request_data rpt;
-            rpt.command = frp_runtime_p2p_upgrade_request_command;
-            rpt.flow_id = ready.flow_id;
-            rpt.rtt_ms  = rtt;
-            channel_->send_command(rpt);
-        }
+        // Handled internally by frp_proxy_data_channel -- ignore here
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {
@@ -1360,8 +1337,8 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         if (!session->data_channel) return;
         FINFO("accessor session {} flow {} flow_p2p_peer peer={}:{} peer_nat_type={} peer_rtt={}ms",
               session->session_id, session->flow_id, peer.peer_host, peer.peer_port,
-              static_cast<int>(peer.peer_nat_type), peer.peer_rtt_ms);
-        session->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type, peer.peer_rtt_ms);
+              static_cast<int>(peer.peer_nat_type), peer.peer_startup_rtt_ms);
+        session->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type, peer.peer_startup_rtt_ms);
         return;
     }
     case frp_runtime_flow_data_command: {

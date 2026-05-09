@@ -369,17 +369,12 @@ void frp_proxy_data_channel::do_endpoint_probe() {
     std::error_code ec;
     auto local_port = p2p_socket_->local_endpoint(ec).port();
 
-    auto now_ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    endpoint_probe_send_ts_ = static_cast<std::uint64_t>(now_ts);
-
     frp_runtime_p2p_probe_data probe;
-    probe.command            = frp_runtime_p2p_probe_command;
-    probe.flow_id            = flow_id_;
-    probe.uuid               = uuid_;
-    probe.local_ip           = "";
-    probe.local_port         = local_port;
-    probe.client_timestamp_ms = endpoint_probe_send_ts_;
+    probe.command    = frp_runtime_p2p_probe_command;
+    probe.flow_id    = flow_id_;
+    probe.uuid       = uuid_;
+    probe.local_ip   = "";
+    probe.local_port = local_port;
     auto payload   = Fundamental::io::to_json(probe);
     auto encrypted = frp_kcp_encrypt_string(frp_derive_kcp_flow_key(traffic_secret_, 0), payload);
     if (encrypted.empty()) {

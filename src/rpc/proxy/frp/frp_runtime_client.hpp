@@ -157,6 +157,7 @@ private:
     std::shared_ptr<frp_runtime_signal_client_channel> channel_;
     std::unordered_map<std::uint32_t, std::shared_ptr<provider_flow_runtime>> flows_;
     frp_runtime_nat_type probed_nat_type_ = frp_runtime_nat_type_disabled;
+    std::uint32_t startup_rtt_ms_ = 100;
 };
 
 class frp_runtime_accessor_agent : public std::enable_shared_from_this<frp_runtime_accessor_agent>,
@@ -180,6 +181,7 @@ private:
         std::string listen_host;
         std::uint16_t listen_port = 0;
         std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
+        std::uint32_t provider_startup_rtt_ms = 100;
         asio::ip::tcp::acceptor acceptor;
 
         listener_runtime(const asio::any_io_executor& executor,
@@ -215,6 +217,7 @@ private:
     std::unordered_map<std::uint64_t, std::shared_ptr<accessor_session_context>> pending_sessions_;
     std::uint64_t next_session_id_ = 1;
     frp_runtime_nat_type probed_nat_type_ = frp_runtime_nat_type_disabled;
+    std::uint32_t startup_rtt_ms_ = 100;
 };
 
 } // namespace network::proxy
