@@ -369,12 +369,17 @@ void frp_proxy_data_channel::do_endpoint_probe() {
     std::error_code ec;
     auto local_port = p2p_socket_->local_endpoint(ec).port();
 
+    auto now_ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    endpoint_probe_send_ts_ = static_cast<std::uint64_t>(now_ts);
+
     frp_runtime_p2p_probe_data probe;
-    probe.command    = frp_runtime_p2p_probe_command;
-    probe.flow_id    = flow_id_;
-    probe.uuid       = uuid_;
-    probe.local_ip   = "";
-    probe.local_port = local_port;
+    probe.command            = frp_runtime_p2p_probe_command;
+    probe.flow_id            = flow_id_;
+    probe.uuid               = uuid_;
+    probe.local_ip           = "";
+    probe.local_port         = local_port;
+    probe.client_timestamp_ms = endpoint_probe_send_ts_;
     auto payload   = Fundamental::io::to_json(probe);
     auto encrypted = frp_kcp_encrypt_string(frp_derive_kcp_flow_key(traffic_secret_, 0), payload);
     if (encrypted.empty()) {
@@ -409,7 +414,8 @@ void frp_proxy_data_channel::do_endpoint_probe() {
 
 void frp_proxy_data_channel::set_p2p_peer(const std::string& peer_host,
                                            std::uint16_t peer_port,
-                                           std::uint8_t peer_nat_type) {
+                                           std::uint8_t peer_nat_type,
+                                           std::uint32_t peer_rtt_ms) {
     if (!reference_.is_valid() || !p2p_socket_) return;
     awaiting_endpoint_ready_ = false;
     endpoint_probe_timer_.cancel();
@@ -423,9 +429,10 @@ void frp_proxy_data_channel::set_p2p_peer(const std::string& peer_host,
     }
     p2p_peer_endpoint_ = asio::ip::udp::endpoint(addr, peer_port);
     peer_nat_type_      = peer_nat_type;
+    peer_rtt_ms_        = peer_rtt_ms;
 
-    FINFO("frp_proxy_data_channel flow_id={} set_p2p_peer peer={}:{} peer_nat_type={}",
-          flow_id_, peer_host, peer_port, static_cast<int>(peer_nat_type));
+    FINFO("frp_proxy_data_channel flow_id={} set_p2p_peer peer={}:{} peer_nat_type={} peer_rtt={}ms my_rtt={}ms",
+          flow_id_, peer_host, peer_port, static_cast<int>(peer_nat_type), peer_rtt_ms_, my_rtt_ms_);
 
     if (peer_nat_type == frp_runtime_nat_type_disabled || my_nat_type_ == frp_runtime_nat_type_disabled) {
         FINFO("frp_proxy_data_channel flow_id={} set_p2p_peer p2p not viable peer_nat={} my_nat={}",
@@ -696,11 +703,8 @@ void frp_proxy_data_channel::do_punch_round() {
         if (!reference_.is_valid() || !punch_active_ || p2p_success_ || punch_done_) return;
         if (*retransmit_index >= kPunchRetransmitCount) {
             punch_round_++;
-            punch_timer_.expires_after(std::chrono::milliseconds(kPunchRoundMs));
-            punch_timer_.async_wait([this, self](const std::error_code& ec) mutable {
-                if (ec) return;
-                do_punch_round();
-            });
+            // No extra round gap: start next round immediately
+            do_punch_round();
             return;
         }
         (*retransmit_index)++;
@@ -737,7 +741,11 @@ void frp_proxy_data_channel::do_punch_round() {
             }
         }
 
-        punch_timer_.expires_after(std::chrono::milliseconds(kPunchRetransmitMs));
+        // Adaptive retransmit interval: (my_rtt + peer_rtt) * 0.75
+        auto interval_ms = static_cast<int>((my_rtt_ms_ + peer_rtt_ms_) * 3 / 4);
+        if (interval_ms < 50) interval_ms = 50;
+        if (interval_ms > 500) interval_ms = 500;
+        punch_timer_.expires_after(std::chrono::milliseconds(interval_ms));
         punch_timer_.async_wait([do_retransmit](const std::error_code& ec) mutable {
             if (ec) return;
             (*do_retransmit)();

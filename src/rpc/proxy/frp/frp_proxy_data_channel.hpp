@@ -81,7 +81,9 @@ public:
     // Provide peer endpoint info from server's flow_p2p_peer command
     void set_p2p_peer(const std::string& peer_host,
                       std::uint16_t peer_port,
-                      std::uint8_t peer_nat_type);
+                      std::uint8_t peer_nat_type,
+                      std::uint32_t peer_rtt_ms);
+    void set_my_rtt_ms(std::uint32_t rtt_ms) { my_rtt_ms_ = rtt_ms; }
 
     // Returns true if p2p upgrade has completed
     bool is_p2p_active() const { return p2p_success_; }
@@ -177,6 +179,9 @@ private:
     bool confirmation_sent_ = false;  // we have replied with correct peer_port
     int keepalive_probe_count_ = 0;   // consecutive keepalive probes without response
     bool keepalive_probing_ = false;  // in 2s probing state (after 10s idle)
+    std::uint64_t endpoint_probe_send_ts_ = 0; // timestamp sent in endpoint probe
+    std::uint32_t my_rtt_ms_ = 100;    // RTT to server, default 100ms
+    std::uint32_t peer_rtt_ms_ = 100;  // peer's RTT to server, default 100ms
 
     // callbacks
     connected_callback_t on_connected_;

@@ -827,7 +827,27 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         return;
     }
     case frp_runtime_flow_endpoint_ready_command: {
-        // Handled internally by frp_proxy_data_channel -- ignore here
+        frp_runtime_flow_endpoint_ready_data ready;
+        if (!Fundamental::io::from_json(payload, ready)) {
+            channel_->release_obj();
+            return;
+        }
+        // Compute RTT from echoed timestamp, report to server
+        if (ready.client_timestamp_ms != 0) {
+            auto now_ts = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            auto rtt = static_cast<std::uint32_t>(now_ts - ready.client_timestamp_ms);
+            auto it_rt = flows_.find(ready.flow_id);
+            if (it_rt != flows_.end() && it_rt->second->data_channel) {
+                it_rt->second->data_channel->set_my_rtt_ms(rtt);
+            }
+            frp_runtime_p2p_rtt_report_data report;
+            report.command = frp_runtime_p2p_rtt_report_command;
+            report.flow_id = ready.flow_id;
+            report.rtt_ms  = rtt;
+            channel_->send_command(report);
+        }
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {
@@ -840,9 +860,10 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         if (it == flows_.end()) return;
         auto flow = it->second;
         if (!flow->data_channel) return;
-        FINFO("provider flow {} flow_p2p_peer peer={}:{} peer_nat_type={}",
-              flow->flow_id, peer.peer_host, peer.peer_port, static_cast<int>(peer.peer_nat_type));
-        flow->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type);
+        FINFO("provider flow {} flow_p2p_peer peer={}:{} peer_nat_type={} peer_rtt={}ms",
+              flow->flow_id, peer.peer_host, peer.peer_port,
+              static_cast<int>(peer.peer_nat_type), peer.peer_rtt_ms);
+        flow->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type, peer.peer_rtt_ms);
         return;
     }
     case frp_runtime_flow_data_command: {
@@ -1305,7 +1326,26 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         return;
     }
     case frp_runtime_flow_endpoint_ready_command: {
-        // Handled internally by frp_proxy_data_channel -- ignore here
+        frp_runtime_flow_endpoint_ready_data ready;
+        if (!Fundamental::io::from_json(payload, ready)) {
+            channel_->release_obj();
+            return;
+        }
+        if (ready.client_timestamp_ms != 0) {
+            auto now_ts = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            auto rtt = static_cast<std::uint32_t>(now_ts - ready.client_timestamp_ms);
+            auto it_rt = sessions_by_flow_id_.find(ready.flow_id);
+            if (it_rt != sessions_by_flow_id_.end() && it_rt->second->data_channel) {
+                it_rt->second->data_channel->set_my_rtt_ms(rtt);
+            }
+            frp_runtime_p2p_rtt_report_data report;
+            report.command = frp_runtime_p2p_rtt_report_command;
+            report.flow_id = ready.flow_id;
+            report.rtt_ms  = rtt;
+            channel_->send_command(report);
+        }
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {
@@ -1318,10 +1358,10 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         if (it == sessions_by_flow_id_.end()) return;
         auto session = it->second;
         if (!session->data_channel) return;
-        FINFO("accessor session {} flow {} flow_p2p_peer peer={}:{} peer_nat_type={}",
+        FINFO("accessor session {} flow {} flow_p2p_peer peer={}:{} peer_nat_type={} peer_rtt={}ms",
               session->session_id, session->flow_id, peer.peer_host, peer.peer_port,
-              static_cast<int>(peer.peer_nat_type));
-        session->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type);
+              static_cast<int>(peer.peer_nat_type), peer.peer_rtt_ms);
+        session->data_channel->set_p2p_peer(peer.peer_host, peer.peer_port, peer.peer_nat_type, peer.peer_rtt_ms);
         return;
     }
     case frp_runtime_flow_data_command: {

@@ -76,6 +76,8 @@ public:
     bool handle_p2p_upgrade_request(const std::shared_ptr<frp_runtime_signal_session>& session,
                                     const frp_runtime_p2p_upgrade_request_data& data,
                                     std::string& error_message);
+    void handle_p2p_rtt_report(const std::shared_ptr<frp_runtime_signal_session>& session,
+                               const frp_runtime_p2p_rtt_report_data& data);
     void release_session_state(const frp_runtime_signal_session* session_ptr);
 
     const frp_public_server_config& get_config() const {
@@ -106,6 +108,7 @@ private:
         std::string local_ip;
         std::uint16_t local_port = 0;
         udp::endpoint observed_endpoint;
+        std::uint64_t client_timestamp_ms = 0;
         bool ready = false;
     };
 
@@ -138,6 +141,8 @@ private:
         // p2p upgrade: set when flow_p2p_peer is sent, tells
         // release_session_state that relay disconnects are expected
         bool p2p_signaled = false;
+        std::uint32_t provider_rtt_ms = 0;
+        std::uint32_t accessor_rtt_ms = 0;
         std::weak_ptr<frp_runtime_signal_session> provider_data_session;
         std::weak_ptr<frp_runtime_signal_session> accessor_data_session;
         p2p_probe_state provider_probe;
@@ -250,6 +255,7 @@ private:
     void handle_flow_data_phase(const frp_runtime_flow_data_data& request);
     void handle_flow_closed_phase(const frp_runtime_flow_closed_data& request);
     void handle_p2p_upgrade_request_phase(const frp_runtime_p2p_upgrade_request_data& request);
+    void handle_p2p_rtt_report_phase(const frp_runtime_p2p_rtt_report_data& request);
     void send_auth_failure_and_close(const std::string& message);
     void close_socket();
     void ssl_handshake();
