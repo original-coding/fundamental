@@ -25,7 +25,7 @@ static constexpr int kPunchMaxRounds      = 32;
 static constexpr int kPunchSocketCount    = 32;
 static constexpr int kPunchScanRound0     = 64;
 static constexpr int kPunchScanPerRound   = 128;
-static constexpr int kPunchRetransmitCount = 5;
+static constexpr int kPunchRetransmitCount = 10;
 static constexpr int kPunchRetransmitMs   = 100;
 static constexpr int kPunchRoundMs        = 1000;
 
