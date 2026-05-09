@@ -652,7 +652,7 @@ void frp_proxy_data_channel::do_punch_round() {
     const bool i_am_symmetric = (my_nat_type_ == frp_runtime_nat_type_symmetric);
     const bool peer_is_symmetric = (peer_nat_type_ == frp_runtime_nat_type_symmetric);
     const bool both_full = !i_am_symmetric && !peer_is_symmetric;
-    const int max_rounds = kPunchMaxRounds + ((i_am_symmetric || both_full) ? 0 : 1);
+    const int max_rounds = both_full ? 1 : (kPunchMaxRounds + (i_am_symmetric ? 0 : 1));
 
     if (punch_round_ >= max_rounds) {
         FINFO("frp_proxy_data_channel flow_id={} udp_punch all rounds exhausted", flow_id_);
