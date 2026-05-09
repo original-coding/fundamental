@@ -83,7 +83,7 @@ public:
                       std::uint16_t peer_port,
                       std::uint8_t peer_nat_type,
                       std::uint32_t peer_rtt_ms);
-    void set_my_rtt_ms(std::uint32_t rtt_ms) { my_rtt_ms_ = rtt_ms; }
+    void set_my_rtt_ms(std::uint32_t rtt_ms) { my_rtt_ms_ = rtt_ms > 0 ? rtt_ms : 100U; }
 
     // Returns true if p2p upgrade has completed
     bool is_p2p_active() const { return p2p_success_; }
