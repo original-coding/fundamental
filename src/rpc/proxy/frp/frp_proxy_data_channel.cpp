@@ -424,7 +424,7 @@ void frp_proxy_data_channel::set_p2p_peer(const std::string& peer_host,
     }
     p2p_peer_endpoint_ = asio::ip::udp::endpoint(addr, peer_port);
     peer_nat_type_      = peer_nat_type;
-    peer_rtt_ms_        = peer_rtt_ms > 0 ? peer_rtt_ms : 100U;
+    peer_rtt_ms_        = peer_rtt_ms;
 
     FINFO("frp_proxy_data_channel flow_id={} set_p2p_peer peer={}:{} peer_nat_type={} peer_rtt={}ms my_rtt={}ms",
           flow_id_, peer_host, peer_port, static_cast<int>(peer_nat_type), peer_rtt_ms_, my_rtt_ms_);

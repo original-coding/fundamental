@@ -160,14 +160,14 @@ bool frp_runtime_public_server::bind_signal_identity(const std::shared_ptr<frp_r
             provider.uuid          = request.uuid;
             provider.register_key  = request.register_key;
             provider.nat_type      = request.nat_type;
-            provider.startup_rtt_ms = request.startup_rtt_ms > 0 ? request.startup_rtt_ms : 100U;
+            provider.startup_rtt_ms = request.startup_rtt_ms;
             provider.session       = session;
         } else {
             auto& accessor         = accessors_by_uuid_[request.uuid];
             accessor.uuid          = request.uuid;
             accessor.register_key  = request.register_key;
             accessor.nat_type      = request.nat_type;
-            accessor.startup_rtt_ms = request.startup_rtt_ms > 0 ? request.startup_rtt_ms : 100U;
+            accessor.startup_rtt_ms = request.startup_rtt_ms;
             accessor.session       = session;
         }
         FINFO("bind_signal_identity uuid={} role={} nat={} startup_rtt={}ms",

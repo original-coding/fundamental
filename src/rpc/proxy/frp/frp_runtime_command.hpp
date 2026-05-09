@@ -114,7 +114,7 @@ struct frp_runtime_join_request_data : frp_runtime_command_base {
     std::string uuid;
     std::string register_key;
     std::uint8_t nat_type = frp_runtime_nat_type_disabled;
-    std::uint32_t startup_rtt_ms = 0;
+    std::uint32_t startup_rtt_ms = 100;
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
