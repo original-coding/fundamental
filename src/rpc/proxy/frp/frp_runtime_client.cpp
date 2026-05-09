@@ -712,6 +712,8 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
                             ? probed_nat_type_
                             : frp_runtime_nat_type_disabled;
         join.startup_rtt_ms = startup_rtt_ms_;
+        FINFO("provider send join uuid={} nat_type={} startup_rtt={}ms",
+              uuid_, static_cast<int>(join.nat_type), startup_rtt_ms_);
         channel_->send_command(join);
         return;
     }
@@ -1198,6 +1200,8 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
                             ? probed_nat_type_
                             : frp_runtime_nat_type_disabled;
         join.startup_rtt_ms = startup_rtt_ms_;
+        FINFO("accessor send join uuid={} nat_type={} startup_rtt={}ms",
+              uuid_, static_cast<int>(join.nat_type), startup_rtt_ms_);
         channel_->send_command(join);
         return;
     }

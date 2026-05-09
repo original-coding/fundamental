@@ -598,6 +598,9 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         provider_peer.peer_startup_rtt_ms = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.startup_rtt_ms : 100U;
         accessor_peer.peer_startup_rtt_ms = provider_it != providers_by_uuid_.end() ? provider_it->second.startup_rtt_ms : 100U;
 
+        FINFO("register_p2p_probe flow_id={} provider_rtt={}ms accessor_rtt={}ms",
+              data.flow_id, accessor_peer.peer_startup_rtt_ms, provider_peer.peer_startup_rtt_ms);
+
         // Mark flow so release_session_state tolerates relay disconnects
         // that will happen when both sides call switch_to_p2p().
         flow.p2p_signaled = true;
@@ -738,6 +741,9 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
             accessor_peer.peer_nat_type = provider_it != providers_by_uuid_.end() ? provider_it->second.nat_type : static_cast<std::uint8_t>(frp_runtime_nat_type_disabled);
             provider_peer.peer_startup_rtt_ms = accessor_it != accessors_by_uuid_.end() ? accessor_it->second.startup_rtt_ms : 100U;
             accessor_peer.peer_startup_rtt_ms = provider_it != providers_by_uuid_.end() ? provider_it->second.startup_rtt_ms : 100U;
+
+            FINFO("handle_p2p_upgrade_request flow_id={} provider_rtt={}ms accessor_rtt={}ms",
+                  data.flow_id, accessor_peer.peer_startup_rtt_ms, provider_peer.peer_startup_rtt_ms);
         }
 
         if (probes_ready) {
