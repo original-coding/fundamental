@@ -605,9 +605,9 @@ void frp_proxy_data_channel::start_udp_punch() {
                                 }
                                 if (reflected == my_port) {
                                     punch_match_count_++;
-                                    FINFO("frp_proxy_data_channel flow_id={} punch match {}/2 src={} reflected={}",
+                                    FINFO("frp_proxy_data_channel flow_id={} punch match {}/1 src={} reflected={}",
                                           flow_id_, punch_match_count_, src_port, reflected);
-                                    if (punch_match_count_ >= 2) {
+                                    if (punch_match_count_ >= 1) {
                                         for (auto& s : punch_sockets_) {
                                             if (s.get() == punch_sock_ptr) {
                                                 p2p_socket_ = std::move(s);
@@ -808,9 +808,9 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                         }
                         if (reflected == my_port) {
                             punch_match_count_++;
-                            FINFO("frp_proxy_data_channel flow_id={} punch match {}/2 src={} reflected={}",
+                            FINFO("frp_proxy_data_channel flow_id={} punch match {}/1 src={} reflected={}",
                                   flow_id_, punch_match_count_, src_port, reflected);
-                            if (punch_match_count_ >= 2) {
+                            if (punch_match_count_ >= 1) {
                                 for (auto& s : punch_sockets_) {
                                     if (s) { std::error_code ce; s->close(ce); }
                                 }
