@@ -129,55 +129,39 @@ PIDS+=("$!")
 sleep 3
 
 echo ""
-echo "[warmup] triggering first connection to start p2p upgrade..."
-if "${ECHO_BIN}" --mode client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
-        --count 3 --delay 100 >"${WORK_DIR}/warmup.log" 2>&1; then
-    echo "   warmup connection ok"
-else
-    echo "   warmup connection failed (ignoring)"
-fi
-
-# Wait for p2p upgrade to complete
-sleep 3
-
-echo ""
 echo "[test] running echo client against accessor ${ACCESSOR_PORT} ..."
 
-for i in $(seq 1 30); do
-    if "${ECHO_BIN}" --mode client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
-            --count 20 --delay 500 >"${WORK_DIR}/echo_client.log" 2>&1; then
-        if grep -q "\[TEST PASSED\]" "${WORK_DIR}/echo_client.log"; then
-            echo "✅ PASSED: data path works"
-            echo ""
+"${ECHO_BIN}" --mode client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
+        --count 20 --delay 500 >"${WORK_DIR}/echo_client.log" 2>&1
 
-            # Check log evidence for p2p upgrade
-            P2P_OK=false
-            if grep -q "switched to p2p" "${WORK_DIR}/provider.log" 2>/dev/null || \
-               grep -q "switched to p2p" "${WORK_DIR}/accessor.log" 2>/dev/null; then
-                P2P_OK=true
-            fi
-            if [[ "${P2P_OK}" == "true" ]]; then
-                echo "   p2p upgrade          : confirmed"
-            else
-                echo "   p2p upgrade          : not observed"
-            fi
-            echo ""
-            echo "=== P2P evidence ==="
-            echo "--- udp_punch succeeded ---"
-            grep "udp_punch succeeded\|switched to p2p\|punch confirmed" "${WORK_DIR}/provider.log" "${WORK_DIR}/accessor.log" || echo "   (none)"
-            echo ""
-            echo "=== tail logs ==="
-            echo "--- server.log (last 8 lines) ---"
-            tail -n 8 "${WORK_DIR}/server.log"
-            echo "--- provider.log (last 8 lines) ---"
-            tail -n 8 "${WORK_DIR}/provider.log"
-            echo "--- accessor.log (last 8 lines) ---"
-            tail -n 8 "${WORK_DIR}/accessor.log"
-            exit 0
-        fi
+if grep -q "\[TEST PASSED\]" "${WORK_DIR}/echo_client.log"; then
+    echo "✅ PASSED: data path works"
+    echo ""
+
+    # Check log evidence for p2p upgrade
+    P2P_OK=false
+    if grep -q "switched to p2p" "${WORK_DIR}/provider.log" 2>/dev/null || \
+       grep -q "switched to p2p" "${WORK_DIR}/accessor.log" 2>/dev/null; then
+        P2P_OK=true
     fi
-    sleep 1
-done
+    if [[ "${P2P_OK}" == "true" ]]; then
+        echo "   p2p upgrade          : confirmed"
+    else
+        echo "   p2p upgrade          : not observed"
+    fi
+    echo ""
+    echo "=== P2P evidence ==="
+    grep "switched to p2p" "${WORK_DIR}/provider.log" "${WORK_DIR}/accessor.log" || echo "   (none)"
+    echo ""
+    echo "=== tail logs ==="
+    echo "--- server.log (last 8 lines) ---"
+    tail -n 8 "${WORK_DIR}/server.log"
+    echo "--- provider.log (last 8 lines) ---"
+    tail -n 8 "${WORK_DIR}/provider.log"
+    echo "--- accessor.log (last 8 lines) ---"
+    tail -n 8 "${WORK_DIR}/accessor.log"
+    exit 0
+fi
 
 echo "❌ FAILED: echo test did not pass"
 echo ""
