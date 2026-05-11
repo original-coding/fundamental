@@ -750,7 +750,7 @@ void frp_proxy_data_channel::do_punch_round() {
 
         // Adaptive retransmit interval: (my_rtt + peer_rtt) * 0.75
         auto interval_ms = static_cast<int>((my_rtt_ms_ + peer_rtt_ms_) * 3 / 4);
-        if (interval_ms < 50) interval_ms = 50;
+        if (interval_ms < 10) interval_ms = 10;
         if (interval_ms > 500) interval_ms = 500;
         punch_timer_.expires_after(std::chrono::milliseconds(interval_ms));
         punch_timer_.async_wait([do_retransmit](const std::error_code& ec) mutable {
