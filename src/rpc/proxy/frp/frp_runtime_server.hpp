@@ -142,6 +142,7 @@ private:
         // p2p upgrade: set when flow_p2p_peer is sent, tells
         // release_session_state that relay disconnects are expected
         bool p2p_signaled = false;
+        bool p2p_peer_sent = false;
         std::weak_ptr<frp_runtime_signal_session> provider_data_session;
         std::weak_ptr<frp_runtime_signal_session> accessor_data_session;
         p2p_probe_state provider_probe;

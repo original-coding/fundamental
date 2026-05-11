@@ -499,6 +499,7 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
     frp_runtime_flow_p2p_peer_data accessor_peer;
     provider_peer.command = frp_runtime_flow_p2p_peer_command;
     accessor_peer.command = frp_runtime_flow_p2p_peer_command;
+    bool send_needed = false;
     frp_runtime_flow_endpoint_ready_data provider_ep_ready;
     frp_runtime_flow_endpoint_ready_data accessor_ep_ready;
     provider_ep_ready.command = frp_runtime_flow_endpoint_ready_command;
@@ -604,9 +605,13 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
         // Mark flow so release_session_state tolerates relay disconnects
         // that will happen when both sides call switch_to_p2p().
         flow.p2p_signaled = true;
+        if (!flow.p2p_peer_sent) {
+            flow.p2p_peer_sent = true;
+            send_needed = true;
+        }
     }
 
-    if (both_ready) {
+    if (both_ready && send_needed) {
         // Send flow_endpoint_ready first, then flow_p2p_peer
         if (provider_signal_session) provider_signal_session->send_command(provider_ep_ready);
         if (accessor_signal_session) accessor_signal_session->send_command(accessor_ep_ready);
@@ -631,6 +636,7 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
     }
 
     bool both_requested = false;
+    bool send_needed = false;
     std::string provider_uuid;
     std::string accessor_uuid;
     std::uint8_t provider_nat = frp_runtime_nat_type_disabled;
@@ -744,9 +750,15 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
 
             FINFO("handle_p2p_upgrade_request flow_id={} provider_rtt={}ms accessor_rtt={}ms",
                   data.flow_id, accessor_peer.peer_startup_rtt_ms, provider_peer.peer_startup_rtt_ms);
+
+            flow.p2p_signaled = true;
+            if (!flow.p2p_peer_sent) {
+                flow.p2p_peer_sent = true;
+                send_needed = true;
+            }
         }
 
-        if (probes_ready) {
+        if (probes_ready && send_needed) {
             if (provider_signal_session) provider_signal_session->send_command(provider_ep_ready);
             if (accessor_signal_session) accessor_signal_session->send_command(accessor_ep_ready);
             if (provider_signal_session) provider_signal_session->send_command(provider_peer);
