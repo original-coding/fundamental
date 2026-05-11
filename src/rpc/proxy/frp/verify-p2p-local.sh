@@ -125,15 +125,27 @@ echo "[4/4] starting accessor on ${ACCESSOR_PORT}..."
 "${ACCESSOR_BIN}" --config "${WORK_DIR}/config/accessor.json" >"${WORK_DIR}/accessor.log" 2>&1 &
 PIDS+=("$!")
 
-# Allow extra time for relay to establish and p2p upgrade to complete
-sleep 5
+# Allow extra time for relay to establish
+sleep 3
+
+echo ""
+echo "[warmup] triggering first connection to start p2p upgrade..."
+if "${ECHO_BIN}" --mode client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
+        --count 3 --delay 100 >"${WORK_DIR}/warmup.log" 2>&1; then
+    echo "   warmup connection ok"
+else
+    echo "   warmup connection failed (ignoring)"
+fi
+
+# Wait for p2p upgrade to complete
+sleep 3
 
 echo ""
 echo "[test] running echo client against accessor ${ACCESSOR_PORT} ..."
 
 for i in $(seq 1 30); do
     if "${ECHO_BIN}" --mode client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
-            --count 5 --delay 100 >"${WORK_DIR}/echo_client.log" 2>&1; then
+            --count 20 --delay 500 >"${WORK_DIR}/echo_client.log" 2>&1; then
         if grep -q "\[TEST PASSED\]" "${WORK_DIR}/echo_client.log"; then
             echo "✅ PASSED: data path works"
             echo ""
@@ -156,6 +168,10 @@ for i in $(seq 1 30); do
             else
                 echo "   p2p upgrade          : not observed (relay-only path used)"
             fi
+            echo ""
+            echo "=== P2P evidence ==="
+            echo "--- udp_punch succeeded ---"
+            grep "udp_punch succeeded\|switched to p2p\|punch confirmed" "${WORK_DIR}/provider.log" "${WORK_DIR}/accessor.log" || echo "   (none)"
             echo ""
             echo "=== tail logs ==="
             echo "--- server.log (last 8 lines) ---"
