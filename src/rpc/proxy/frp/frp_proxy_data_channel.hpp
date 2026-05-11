@@ -113,6 +113,8 @@ private:
 
     // --- p2p switch ---
     void switch_to_p2p();
+    void send_punch_confirmation();
+    void handle_peer_punch_confirmed();
     void schedule_p2p_idle_timer();
     void do_keepalive_probe();
     void reset_keepalive_timer();

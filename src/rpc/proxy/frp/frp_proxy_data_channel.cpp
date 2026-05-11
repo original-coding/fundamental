@@ -313,6 +313,8 @@ void frp_proxy_data_channel::schedule_kcp_update() {
     });
 }
 
+static constexpr std::uint8_t kPunchConfirmByte = 0xFF;
+
 void frp_proxy_data_channel::kcp_recv_loop() {
     if (!kcp_) return;
     std::array<char, 16 * 1024> buf {};
@@ -322,12 +324,34 @@ void frp_proxy_data_channel::kcp_recv_loop() {
         std::vector<std::uint8_t> encrypted(buf.data(), buf.data() + n);
         auto plaintext = frp_kcp_decrypt(kcp_traffic_key_, encrypted);
         if (!plaintext) continue;
+        if (plaintext->size() == 1 && (*plaintext)[0] == kPunchConfirmByte && !p2p_success_) {
+            FINFO("frp_proxy_data_channel flow_id={} received punch confirmation via relay", flow_id_);
+            handle_peer_punch_confirmed();
+            continue;
+        }
         if (on_data_) {
             on_data_(std::string(reinterpret_cast<const char*>(plaintext->data()), plaintext->size()));
         }
     }
 }
 
+void frp_proxy_data_channel::send_punch_confirmation() {
+    if (!kcp_) return;
+    std::uint8_t byte = kPunchConfirmByte;
+    kcp_send_raw(reinterpret_cast<const char*>(&byte), 1);
+    FINFO("frp_proxy_data_channel flow_id={} sent punch confirmation via relay", flow_id_);
+}
+
+void frp_proxy_data_channel::handle_peer_punch_confirmed() {
+    if (p2p_success_) return;
+    FINFO("frp_proxy_data_channel flow_id={} peer confirmed punch via relay, switching to p2p", flow_id_);
+    // Clean up punch state
+    punch_active_ = false;
+    punch_done_ = true;
+    p2p_success_ = true;
+    punch_timer_.cancel();
+    switch_to_p2p();
+}
 
 // ---------------------------------------------------------------------------
 // start_p2p_upgrade() -- begin endpoint probe
@@ -615,6 +639,7 @@ void frp_proxy_data_channel::start_udp_punch() {
                                         punch_timer_.cancel();
                                         FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (symmetric) matches={}",
                                               flow_id_, punch_match_count_);
+                                        send_punch_confirmation();
                                         switch_to_p2p();
                                         return;
                                     }
@@ -812,6 +837,7 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                                 punch_timer_.cancel();
                                 FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (full) matches={}",
                                       flow_id_, punch_match_count_);
+                                send_punch_confirmation();
                                 switch_to_p2p();
                                 return;
                             }
