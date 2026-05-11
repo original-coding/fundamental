@@ -124,6 +124,7 @@ void frp_proxy_data_channel::enable_ssl(network_client_ssl_config config) {
 void frp_proxy_data_channel::set_on_connected(connected_callback_t cb)           { on_connected_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_disconnected(disconnected_callback_t cb)     { on_disconnected_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_data(data_callback_t cb)                     { on_data_ = std::move(cb); }
+void frp_proxy_data_channel::set_on_punch_match(punch_match_callback_t cb)       { on_punch_match_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_p2p_upgraded(p2p_upgraded_callback_t cb)     { on_p2p_upgraded_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_p2p_upgrade_failed(p2p_upgrade_failed_callback_t cb) { on_p2p_upgrade_failed_ = std::move(cb); }
 
@@ -313,8 +314,6 @@ void frp_proxy_data_channel::schedule_kcp_update() {
     });
 }
 
-static constexpr std::uint8_t kPunchConfirmByte = 0xFF;
-
 void frp_proxy_data_channel::kcp_recv_loop() {
     if (!kcp_) return;
     std::array<char, 16 * 1024> buf {};
@@ -324,32 +323,23 @@ void frp_proxy_data_channel::kcp_recv_loop() {
         std::vector<std::uint8_t> encrypted(buf.data(), buf.data() + n);
         auto plaintext = frp_kcp_decrypt(kcp_traffic_key_, encrypted);
         if (!plaintext) continue;
-        if (plaintext->size() == 1 && (*plaintext)[0] == kPunchConfirmByte && !p2p_success_) {
-            FINFO("frp_proxy_data_channel flow_id={} received punch confirmation via relay", flow_id_);
-            handle_peer_punch_confirmed();
-            continue;
-        }
         if (on_data_) {
             on_data_(std::string(reinterpret_cast<const char*>(plaintext->data()), plaintext->size()));
         }
     }
 }
 
-void frp_proxy_data_channel::send_punch_confirmation() {
-    if (!kcp_) return;
-    std::uint8_t byte = kPunchConfirmByte;
-    kcp_send_raw(reinterpret_cast<const char*>(&byte), 1);
-    FINFO("frp_proxy_data_channel flow_id={} sent punch confirmation via relay", flow_id_);
-}
-
-void frp_proxy_data_channel::handle_peer_punch_confirmed() {
+void frp_proxy_data_channel::on_punch_confirmed() {
     if (p2p_success_) return;
-    FINFO("frp_proxy_data_channel flow_id={} peer confirmed punch via relay, switching to p2p", flow_id_);
-    // Clean up punch state
+    FINFO("frp_proxy_data_channel flow_id={} punch confirmed by peer via signal", flow_id_);
     punch_active_ = false;
     punch_done_ = true;
     p2p_success_ = true;
     punch_timer_.cancel();
+    for (auto& s : punch_sockets_) {
+        if (s) { std::error_code ce; s->close(ce); }
+    }
+    punch_sockets_.clear();
     switch_to_p2p();
 }
 
@@ -639,7 +629,6 @@ void frp_proxy_data_channel::start_udp_punch() {
                                         punch_timer_.cancel();
                                         FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (symmetric) matches={}",
                                               flow_id_, punch_match_count_);
-                                        send_punch_confirmation();
                                         switch_to_p2p();
                                         return;
                                     }
@@ -825,6 +814,7 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                             punch_match_count_++;
                             FINFO("frp_proxy_data_channel flow_id={} punch match {}/1 src={} reflected={}",
                                   flow_id_, punch_match_count_, src_port, reflected);
+                            if (on_punch_match_) on_punch_match_();
                             if (punch_match_count_ >= 1) {
                                 for (auto& s : punch_sockets_) {
                                     if (s) { std::error_code ce; s->close(ce); }
@@ -837,7 +827,6 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                                 punch_timer_.cancel();
                                 FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (full) matches={}",
                                       flow_id_, punch_match_count_);
-                                send_punch_confirmation();
                                 switch_to_p2p();
                                 return;
                             }

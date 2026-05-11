@@ -806,6 +806,13 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
                 flow->data_channel ? flow->data_channel->local_p2p_endpoint() : "?",
                 "peer");
         });
+        flow->data_channel->set_on_punch_match([this, self = shared_from_this(), flow] {
+            if (!reference_.is_valid() || !channel_) return;
+            frp_runtime_punch_confirmed_data conf;
+            conf.command = frp_runtime_punch_confirmed_command;
+            conf.flow_id = flow->flow_id;
+            channel_->send_command(conf);
+        });
         flow->data_channel->set_on_p2p_upgrade_failed([flow] {
             FINFO("provider flow {} p2p upgrade failed, relay continues", flow->flow_id);
         });
@@ -841,6 +848,17 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
     }
     case frp_runtime_flow_endpoint_ready_command: {
         // Handled internally by frp_proxy_data_channel -- ignore here
+        return;
+    }
+    case frp_runtime_punch_confirmed_command: {
+        frp_runtime_punch_confirmed_data conf;
+        if (!Fundamental::io::from_json(payload, conf)) {
+            channel_->release_obj();
+            return;
+        }
+        auto it = flows_.find(conf.flow_id);
+        if (it == flows_.end()) return;
+        if (it->second->data_channel) it->second->data_channel->on_punch_confirmed();
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {
@@ -1289,6 +1307,13 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
                 session->data_channel ? session->data_channel->local_p2p_endpoint() : "?",
                 "peer");
         });
+        session->data_channel->set_on_punch_match([this, self = shared_from_this(), session] {
+            if (!reference_.is_valid() || !channel_) return;
+            frp_runtime_punch_confirmed_data conf;
+            conf.command = frp_runtime_punch_confirmed_command;
+            conf.flow_id = session->flow_id;
+            channel_->send_command(conf);
+        });
         session->data_channel->set_on_p2p_upgrade_failed([session] {
             FINFO("accessor session {} flow {} p2p upgrade failed, relay continues",
                   session->session_id, session->flow_id);
@@ -1327,6 +1352,17 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
     }
     case frp_runtime_flow_endpoint_ready_command: {
         // Handled internally by frp_proxy_data_channel -- ignore here
+        return;
+    }
+    case frp_runtime_punch_confirmed_command: {
+        frp_runtime_punch_confirmed_data conf;
+        if (!Fundamental::io::from_json(payload, conf)) {
+            channel_->release_obj();
+            return;
+        }
+        auto it = sessions_by_flow_id_.find(conf.flow_id);
+        if (it == sessions_by_flow_id_.end()) return;
+        if (it->second->data_channel) it->second->data_channel->on_punch_confirmed();
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {

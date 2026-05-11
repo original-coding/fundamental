@@ -39,6 +39,7 @@ public:
     using connected_callback_t           = std::function<void()>;
     using disconnected_callback_t        = std::function<void()>;
     using data_callback_t                = std::function<void(std::string)>;
+    using punch_match_callback_t         = std::function<void()>;
     using p2p_upgraded_callback_t        = std::function<void()>;
     using p2p_upgrade_failed_callback_t  = std::function<void()>;
 
@@ -63,6 +64,8 @@ public:
     void set_on_connected(connected_callback_t cb);
     void set_on_disconnected(disconnected_callback_t cb);
     void set_on_data(data_callback_t cb);
+    void set_on_punch_match(punch_match_callback_t cb);
+    void on_punch_confirmed();
     void set_on_p2p_upgraded(p2p_upgraded_callback_t cb);
     void set_on_p2p_upgrade_failed(p2p_upgrade_failed_callback_t cb);
 
@@ -113,8 +116,6 @@ private:
 
     // --- p2p switch ---
     void switch_to_p2p();
-    void send_punch_confirmation();
-    void handle_peer_punch_confirmed();
     void schedule_p2p_idle_timer();
     void do_keepalive_probe();
     void reset_keepalive_timer();
@@ -188,6 +189,7 @@ private:
     connected_callback_t on_connected_;
     disconnected_callback_t on_disconnected_;
     data_callback_t on_data_;
+    punch_match_callback_t on_punch_match_;
     p2p_upgraded_callback_t on_p2p_upgraded_;
     p2p_upgrade_failed_callback_t on_p2p_upgrade_failed_;
 };
