@@ -39,7 +39,7 @@ public:
     using connected_callback_t           = std::function<void()>;
     using disconnected_callback_t        = std::function<void()>;
     using data_callback_t                = std::function<void(std::string)>;
-    using punch_match_callback_t         = std::function<void()>;
+    using punch_match_callback_t         = std::function<void(std::uint16_t local_port, std::uint16_t peer_port)>;
     using p2p_upgraded_callback_t        = std::function<void()>;
     using p2p_upgrade_failed_callback_t  = std::function<void()>;
 
@@ -65,7 +65,11 @@ public:
     void set_on_disconnected(disconnected_callback_t cb);
     void set_on_data(data_callback_t cb);
     void set_on_punch_match(punch_match_callback_t cb);
-    void on_punch_confirmed();
+    bool set_punch_port_pair(std::uint16_t local_port, std::uint16_t peer_port);
+    bool check_punch_port_pair(std::uint16_t local_port, std::uint16_t peer_port);
+    void on_punch_confirm(std::uint16_t local_port, std::uint16_t peer_port);
+    void on_punch_confirm_ack(std::uint16_t local_port, std::uint16_t peer_port);
+    void on_punch_confirm_ok(std::uint16_t local_port, std::uint16_t peer_port);
     void set_on_p2p_upgraded(p2p_upgraded_callback_t cb);
     void set_on_p2p_upgrade_failed(p2p_upgrade_failed_callback_t cb);
 
@@ -182,6 +186,9 @@ private:
     bool confirmation_sent_ = false;  // we have replied with correct peer_port
     int keepalive_probe_count_ = 0;   // consecutive keepalive probes without response
     bool keepalive_probing_ = false;  // in 2s probing state (after 10s idle)
+    std::uint16_t confirmed_local_port_ = 0;  // port pair for punch handshake
+    std::uint16_t confirmed_peer_port_ = 0;
+    bool port_pair_set_ = false;
     std::uint32_t my_rtt_ms_ = 100;    // RTT to server, default 100ms
     std::uint32_t peer_rtt_ms_ = 100;  // peer's RTT to server, default 100ms
 

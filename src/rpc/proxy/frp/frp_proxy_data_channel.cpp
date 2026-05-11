@@ -126,6 +126,92 @@ void frp_proxy_data_channel::set_on_disconnected(disconnected_callback_t cb)    
 void frp_proxy_data_channel::set_on_data(data_callback_t cb)                     { on_data_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_punch_match(punch_match_callback_t cb)       { on_punch_match_ = std::move(cb); }
 void frp_proxy_data_channel::set_on_p2p_upgraded(p2p_upgraded_callback_t cb)     { on_p2p_upgraded_ = std::move(cb); }
+
+bool frp_proxy_data_channel::set_punch_port_pair(std::uint16_t local_port, std::uint16_t peer_port) {
+    if (port_pair_set_) {
+        if (confirmed_local_port_ != local_port || confirmed_peer_port_ != peer_port) {
+            FWARN("frp_proxy_data_channel flow_id={} punch port pair mismatch: existing={}:{} incoming={}:{}",
+                  flow_id_, confirmed_local_port_, confirmed_peer_port_, local_port, peer_port);
+            return false;
+        }
+        return true;
+    }
+    confirmed_local_port_ = local_port;
+    confirmed_peer_port_ = peer_port;
+    port_pair_set_ = true;
+    FINFO("frp_proxy_data_channel flow_id={} punch port pair set: local={} peer={}",
+          flow_id_, local_port, peer_port);
+    return true;
+}
+
+bool frp_proxy_data_channel::check_punch_port_pair(std::uint16_t local_port, std::uint16_t peer_port) {
+    if (!port_pair_set_) return true; // no pair set yet, accept
+    if (confirmed_local_port_ == local_port && confirmed_peer_port_ == peer_port) return true;
+    FWARN("frp_proxy_data_channel flow_id={} punch port pair mismatch: existing={}:{} received={}:{}",
+          flow_id_, confirmed_local_port_, confirmed_peer_port_, local_port, peer_port);
+    return false;
+}
+
+void frp_proxy_data_channel::on_punch_confirm(std::uint16_t local_port, std::uint16_t peer_port) {
+    if (!set_punch_port_pair(local_port, peer_port)) return;
+    if (p2p_success_) return;
+
+    // Find and promote the matching socket on symmetric side
+    if (!punch_sockets_.empty()) {
+        for (auto& s : punch_sockets_) {
+            if (!s) continue;
+            std::error_code ec;
+            if (s->local_endpoint(ec).port() == local_port) {
+                p2p_socket_ = std::move(s);
+                break;
+            }
+        }
+        for (auto& s : punch_sockets_) {
+            if (s) { std::error_code ec; s->close(ec); }
+        }
+        punch_sockets_.clear();
+    }
+
+    // Clean up and switch
+    punch_active_ = false;
+    punch_done_ = true;
+    p2p_success_ = true;
+    punch_timer_.cancel();
+    FINFO("frp_proxy_data_channel flow_id={} punch confirmed via signal, switching to p2p", flow_id_);
+    switch_to_p2p();
+}
+
+void frp_proxy_data_channel::on_punch_confirm_ack(std::uint16_t local_port, std::uint16_t peer_port) {
+    if (!check_punch_port_pair(local_port, peer_port)) return;
+    if (p2p_success_) return;
+
+    punch_active_ = false;
+    punch_done_ = true;
+    p2p_success_ = true;
+    punch_timer_.cancel();
+    for (auto& s : punch_sockets_) {
+        if (s) { std::error_code ec; s->close(ec); }
+    }
+    punch_sockets_.clear();
+    FINFO("frp_proxy_data_channel flow_id={} punch handshake ack, switching to p2p", flow_id_);
+    switch_to_p2p();
+}
+
+void frp_proxy_data_channel::on_punch_confirm_ok(std::uint16_t local_port, std::uint16_t peer_port) {
+    if (!check_punch_port_pair(local_port, peer_port)) return;
+    if (p2p_success_) return;
+
+    punch_active_ = false;
+    punch_done_ = true;
+    p2p_success_ = true;
+    punch_timer_.cancel();
+    for (auto& s : punch_sockets_) {
+        if (s) { std::error_code ec; s->close(ec); }
+    }
+    punch_sockets_.clear();
+    FINFO("frp_proxy_data_channel flow_id={} punch handshake ok, switching to p2p", flow_id_);
+    switch_to_p2p();
+}
 void frp_proxy_data_channel::set_on_p2p_upgrade_failed(p2p_upgrade_failed_callback_t cb) { on_p2p_upgrade_failed_ = std::move(cb); }
 
 void frp_proxy_data_channel::release_obj() {
@@ -327,20 +413,6 @@ void frp_proxy_data_channel::kcp_recv_loop() {
             on_data_(std::string(reinterpret_cast<const char*>(plaintext->data()), plaintext->size()));
         }
     }
-}
-
-void frp_proxy_data_channel::on_punch_confirmed() {
-    if (p2p_success_) return;
-    FINFO("frp_proxy_data_channel flow_id={} punch confirmed by peer via signal", flow_id_);
-    punch_active_ = false;
-    punch_done_ = true;
-    p2p_success_ = true;
-    punch_timer_.cancel();
-    for (auto& s : punch_sockets_) {
-        if (s) { std::error_code ce; s->close(ce); }
-    }
-    punch_sockets_.clear();
-    switch_to_p2p();
 }
 
 // ---------------------------------------------------------------------------
@@ -829,7 +901,7 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                             punch_match_count_++;
                             FINFO("frp_proxy_data_channel flow_id={} punch match {}/1 src={} reflected={}",
                                   flow_id_, punch_match_count_, src_port, reflected);
-                            if (on_punch_match_) on_punch_match_();
+                            if (on_punch_match_) on_punch_match_(my_port, src_port);
                             if (punch_match_count_ >= 1) {
                                 for (auto& s : punch_sockets_) {
                                     if (s) { std::error_code ce; s->close(ce); }

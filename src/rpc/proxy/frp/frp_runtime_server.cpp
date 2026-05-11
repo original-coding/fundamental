@@ -768,14 +768,15 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
     return true;
 }
 
-void frp_runtime_public_server::handle_punch_confirmed(const std::shared_ptr<frp_runtime_signal_session>& session,
-                                                        const frp_runtime_punch_confirmed_data& data) {
+void frp_runtime_public_server::relay_punch_message(const std::shared_ptr<frp_runtime_signal_session>& session,
+                                                      std::uint32_t flow_id,
+                                                      const frp_runtime_command_base& data) {
     std::shared_ptr<frp_runtime_signal_session> peer_session;
     {
         std::scoped_lock<std::mutex> locker(runtime_mutex_);
-        auto flow_it = flows_by_id_.find(data.flow_id);
+        auto flow_it = flows_by_id_.find(flow_id);
         if (flow_it == flows_by_id_.end()) {
-            FWARN("handle_punch_confirmed unknown flow_id={}", data.flow_id);
+            FWARN("relay_punch_message unknown flow_id={}", flow_id);
             return;
         }
         const auto& flow = flow_it->second;
@@ -789,8 +790,8 @@ void frp_runtime_public_server::handle_punch_confirmed(const std::shared_ptr<frp
         }
     }
     if (peer_session) {
-        FINFO("handle_punch_confirmed flow_id={} relaying to peer uuid={}",
-              data.flow_id, peer_session->get_uuid());
+        FINFO("relay_punch_message flow_id={} command={} -> peer uuid={}",
+              flow_id, static_cast<int>(data.command), peer_session->get_uuid());
         peer_session->send_command(data);
     }
 }
@@ -1317,13 +1318,31 @@ void frp_runtime_signal_session::handle_authenticated_phase(const frp_runtime_co
         read_next_command();
         return;
     }
-    case frp_runtime_punch_confirmed_command: {
-        frp_runtime_punch_confirmed_data request;
+    case frp_runtime_punch_confirm_command: {
+        frp_runtime_punch_confirm_data request;
         if (!Fundamental::io::from_json(payload, request)) {
             release_obj();
             return;
         }
-        handle_punch_confirmed_phase(request);
+        handle_punch_confirm_phase(request);
+        return;
+    }
+    case frp_runtime_punch_confirm_ack_command: {
+        frp_runtime_punch_confirm_ack_data request;
+        if (!Fundamental::io::from_json(payload, request)) {
+            release_obj();
+            return;
+        }
+        handle_punch_confirm_ack_phase(request);
+        return;
+    }
+    case frp_runtime_punch_confirm_ok_command: {
+        frp_runtime_punch_confirm_ok_data request;
+        if (!Fundamental::io::from_json(payload, request)) {
+            release_obj();
+            return;
+        }
+        handle_punch_confirm_ok_phase(request);
         return;
     }
     case frp_runtime_p2p_upgrade_request_command: {
@@ -1482,8 +1501,18 @@ void frp_runtime_signal_session::handle_p2p_upgrade_request_phase(const frp_runt
     read_next_command();
 }
 
-void frp_runtime_signal_session::handle_punch_confirmed_phase(const frp_runtime_punch_confirmed_data& request) {
-    if (owner_) owner_->handle_punch_confirmed(shared_from_this(), request);
+void frp_runtime_signal_session::handle_punch_confirm_phase(const frp_runtime_punch_confirm_data& request) {
+    if (owner_) owner_->relay_punch_message(shared_from_this(), request.flow_id, request);
+    read_next_command();
+}
+
+void frp_runtime_signal_session::handle_punch_confirm_ack_phase(const frp_runtime_punch_confirm_ack_data& request) {
+    if (owner_) owner_->relay_punch_message(shared_from_this(), request.flow_id, request);
+    read_next_command();
+}
+
+void frp_runtime_signal_session::handle_punch_confirm_ok_phase(const frp_runtime_punch_confirm_ok_data& request) {
+    if (owner_) owner_->relay_punch_message(shared_from_this(), request.flow_id, request);
     read_next_command();
 }
 

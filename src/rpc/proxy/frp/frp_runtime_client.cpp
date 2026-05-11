@@ -806,11 +806,13 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
                 flow->data_channel ? flow->data_channel->local_p2p_endpoint() : "?",
                 "peer");
         });
-        flow->data_channel->set_on_punch_match([this, self = shared_from_this(), flow] {
+        flow->data_channel->set_on_punch_match([this, self = shared_from_this(), flow](std::uint16_t local_port, std::uint16_t peer_port) {
             if (!reference_.is_valid() || !channel_) return;
-            frp_runtime_punch_confirmed_data conf;
-            conf.command = frp_runtime_punch_confirmed_command;
-            conf.flow_id = flow->flow_id;
+            frp_runtime_punch_confirm_data conf;
+            conf.command    = frp_runtime_punch_confirm_command;
+            conf.flow_id    = flow->flow_id;
+            conf.local_port = local_port;
+            conf.peer_port  = peer_port;
             channel_->send_command(conf);
         });
         flow->data_channel->set_on_p2p_upgrade_failed([flow] {
@@ -850,15 +852,44 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         // Handled internally by frp_proxy_data_channel -- ignore here
         return;
     }
-    case frp_runtime_punch_confirmed_command: {
-        frp_runtime_punch_confirmed_data conf;
-        if (!Fundamental::io::from_json(payload, conf)) {
-            channel_->release_obj();
-            return;
-        }
+    case frp_runtime_punch_confirm_command: {
+        frp_runtime_punch_confirm_data conf;
+        if (!Fundamental::io::from_json(payload, conf)) { channel_->release_obj(); return; }
         auto it = flows_.find(conf.flow_id);
         if (it == flows_.end()) return;
-        if (it->second->data_channel) it->second->data_channel->on_punch_confirmed();
+        auto flow = it->second;
+        if (!flow->data_channel) return;
+        flow->data_channel->on_punch_confirm(conf.peer_port, conf.local_port);
+        frp_runtime_punch_confirm_ack_data ack;
+        ack.command    = frp_runtime_punch_confirm_ack_command;
+        ack.flow_id    = conf.flow_id;
+        ack.local_port = conf.peer_port;
+        ack.peer_port  = conf.local_port;
+        channel_->send_command(ack);
+        return;
+    }
+    case frp_runtime_punch_confirm_ack_command: {
+        frp_runtime_punch_confirm_ack_data ack;
+        if (!Fundamental::io::from_json(payload, ack)) { channel_->release_obj(); return; }
+        auto it = flows_.find(ack.flow_id);
+        if (it == flows_.end()) return;
+        auto flow = it->second;
+        if (!flow->data_channel) return;
+        flow->data_channel->on_punch_confirm_ack(ack.local_port, ack.peer_port);
+        frp_runtime_punch_confirm_ok_data ok;
+        ok.command    = frp_runtime_punch_confirm_ok_command;
+        ok.flow_id    = ack.flow_id;
+        ok.local_port = ack.local_port;
+        ok.peer_port  = ack.peer_port;
+        channel_->send_command(ok);
+        return;
+    }
+    case frp_runtime_punch_confirm_ok_command: {
+        frp_runtime_punch_confirm_ok_data ok;
+        if (!Fundamental::io::from_json(payload, ok)) { channel_->release_obj(); return; }
+        auto it = flows_.find(ok.flow_id);
+        if (it == flows_.end()) return;
+        if (it->second->data_channel) it->second->data_channel->on_punch_confirm_ok(ok.local_port, ok.peer_port);
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {
@@ -1307,11 +1338,13 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
                 session->data_channel ? session->data_channel->local_p2p_endpoint() : "?",
                 "peer");
         });
-        session->data_channel->set_on_punch_match([this, self = shared_from_this(), session] {
+        session->data_channel->set_on_punch_match([this, self = shared_from_this(), session](std::uint16_t local_port, std::uint16_t peer_port) {
             if (!reference_.is_valid() || !channel_) return;
-            frp_runtime_punch_confirmed_data conf;
-            conf.command = frp_runtime_punch_confirmed_command;
-            conf.flow_id = session->flow_id;
+            frp_runtime_punch_confirm_data conf;
+            conf.command    = frp_runtime_punch_confirm_command;
+            conf.flow_id    = session->flow_id;
+            conf.local_port = local_port;
+            conf.peer_port  = peer_port;
             channel_->send_command(conf);
         });
         session->data_channel->set_on_p2p_upgrade_failed([session] {
@@ -1354,15 +1387,44 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         // Handled internally by frp_proxy_data_channel -- ignore here
         return;
     }
-    case frp_runtime_punch_confirmed_command: {
-        frp_runtime_punch_confirmed_data conf;
-        if (!Fundamental::io::from_json(payload, conf)) {
-            channel_->release_obj();
-            return;
-        }
+    case frp_runtime_punch_confirm_command: {
+        frp_runtime_punch_confirm_data conf;
+        if (!Fundamental::io::from_json(payload, conf)) { channel_->release_obj(); return; }
         auto it = sessions_by_flow_id_.find(conf.flow_id);
         if (it == sessions_by_flow_id_.end()) return;
-        if (it->second->data_channel) it->second->data_channel->on_punch_confirmed();
+        auto session = it->second;
+        if (!session->data_channel) return;
+        session->data_channel->on_punch_confirm(conf.peer_port, conf.local_port);
+        frp_runtime_punch_confirm_ack_data ack;
+        ack.command    = frp_runtime_punch_confirm_ack_command;
+        ack.flow_id    = conf.flow_id;
+        ack.local_port = conf.peer_port;
+        ack.peer_port  = conf.local_port;
+        channel_->send_command(ack);
+        return;
+    }
+    case frp_runtime_punch_confirm_ack_command: {
+        frp_runtime_punch_confirm_ack_data ack;
+        if (!Fundamental::io::from_json(payload, ack)) { channel_->release_obj(); return; }
+        auto it = sessions_by_flow_id_.find(ack.flow_id);
+        if (it == sessions_by_flow_id_.end()) return;
+        auto session = it->second;
+        if (!session->data_channel) return;
+        session->data_channel->on_punch_confirm_ack(ack.local_port, ack.peer_port);
+        frp_runtime_punch_confirm_ok_data ok;
+        ok.command    = frp_runtime_punch_confirm_ok_command;
+        ok.flow_id    = ack.flow_id;
+        ok.local_port = ack.local_port;
+        ok.peer_port  = ack.peer_port;
+        channel_->send_command(ok);
+        return;
+    }
+    case frp_runtime_punch_confirm_ok_command: {
+        frp_runtime_punch_confirm_ok_data ok;
+        if (!Fundamental::io::from_json(payload, ok)) { channel_->release_obj(); return; }
+        auto it = sessions_by_flow_id_.find(ok.flow_id);
+        if (it == sessions_by_flow_id_.end()) return;
+        if (it->second->data_channel) it->second->data_channel->on_punch_confirm_ok(ok.local_port, ok.peer_port);
         return;
     }
     case frp_runtime_flow_p2p_peer_command: {

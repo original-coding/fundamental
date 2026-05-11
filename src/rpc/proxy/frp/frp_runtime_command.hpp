@@ -31,7 +31,9 @@ enum frp_runtime_command_type : std::uint8_t
     frp_runtime_flow_endpoint_ready_command,
     frp_runtime_flow_transport_ready_command,
     frp_runtime_p2p_upgrade_request_command,
-    frp_runtime_punch_confirmed_command,
+    frp_runtime_punch_confirm_command,
+    frp_runtime_punch_confirm_ack_command,
+    frp_runtime_punch_confirm_ok_command,
     frp_runtime_flow_ready_command,
     frp_runtime_flow_failed_command,
     frp_runtime_flow_data_command,
@@ -219,8 +221,24 @@ struct frp_runtime_flow_transport_ready_data : frp_runtime_command_base {
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
-struct frp_runtime_punch_confirmed_data : frp_runtime_command_base {
+struct frp_runtime_punch_confirm_data : frp_runtime_command_base {
     std::uint32_t flow_id = 0;
+    std::uint16_t local_port = 0;
+    std::uint16_t peer_port = 0;
+    RTTR_ENABLE(frp_runtime_command_base)
+};
+
+struct frp_runtime_punch_confirm_ack_data : frp_runtime_command_base {
+    std::uint32_t flow_id = 0;
+    std::uint16_t local_port = 0;
+    std::uint16_t peer_port = 0;
+    RTTR_ENABLE(frp_runtime_command_base)
+};
+
+struct frp_runtime_punch_confirm_ok_data : frp_runtime_command_base {
+    std::uint32_t flow_id = 0;
+    std::uint16_t local_port = 0;
+    std::uint16_t peer_port = 0;
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
@@ -392,10 +410,26 @@ inline void __register_frp_runtime_reflect_type__() {
         .constructor()(rttr::policy::ctor::as_object)
         .property("flow_id", &frp_runtime_flow_transport_ready_data::flow_id);
 
-    rttr::registration::class_<frp_runtime_punch_confirmed_data>(
-        "network::proxy::frp_runtime_punch_confirmed_data")
+    rttr::registration::class_<frp_runtime_punch_confirm_data>(
+        "network::proxy::frp_runtime_punch_confirm_data")
         .constructor()(rttr::policy::ctor::as_object)
-        .property("flow_id", &frp_runtime_punch_confirmed_data::flow_id);
+        .property("flow_id", &frp_runtime_punch_confirm_data::flow_id)
+        .property("local_port", &frp_runtime_punch_confirm_data::local_port)
+        .property("peer_port", &frp_runtime_punch_confirm_data::peer_port);
+
+    rttr::registration::class_<frp_runtime_punch_confirm_ack_data>(
+        "network::proxy::frp_runtime_punch_confirm_ack_data")
+        .constructor()(rttr::policy::ctor::as_object)
+        .property("flow_id", &frp_runtime_punch_confirm_ack_data::flow_id)
+        .property("local_port", &frp_runtime_punch_confirm_ack_data::local_port)
+        .property("peer_port", &frp_runtime_punch_confirm_ack_data::peer_port);
+
+    rttr::registration::class_<frp_runtime_punch_confirm_ok_data>(
+        "network::proxy::frp_runtime_punch_confirm_ok_data")
+        .constructor()(rttr::policy::ctor::as_object)
+        .property("flow_id", &frp_runtime_punch_confirm_ok_data::flow_id)
+        .property("local_port", &frp_runtime_punch_confirm_ok_data::local_port)
+        .property("peer_port", &frp_runtime_punch_confirm_ok_data::peer_port);
 
     rttr::registration::class_<frp_runtime_p2p_upgrade_request_data>(
         "network::proxy::frp_runtime_p2p_upgrade_request_data")

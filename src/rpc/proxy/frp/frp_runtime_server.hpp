@@ -76,8 +76,9 @@ public:
     bool handle_p2p_upgrade_request(const std::shared_ptr<frp_runtime_signal_session>& session,
                                     const frp_runtime_p2p_upgrade_request_data& data,
                                     std::string& error_message);
-    void handle_punch_confirmed(const std::shared_ptr<frp_runtime_signal_session>& session,
-                                const frp_runtime_punch_confirmed_data& data);
+    void relay_punch_message(const std::shared_ptr<frp_runtime_signal_session>& session,
+                             std::uint32_t flow_id,
+                             const frp_runtime_command_base& data);
     void release_session_state(const frp_runtime_signal_session* session_ptr);
 
     const frp_public_server_config& get_config() const {
@@ -255,7 +256,9 @@ private:
     void handle_flow_data_phase(const frp_runtime_flow_data_data& request);
     void handle_flow_closed_phase(const frp_runtime_flow_closed_data& request);
     void handle_p2p_upgrade_request_phase(const frp_runtime_p2p_upgrade_request_data& request);
-    void handle_punch_confirmed_phase(const frp_runtime_punch_confirmed_data& request);
+    void handle_punch_confirm_phase(const frp_runtime_punch_confirm_data& request);
+    void handle_punch_confirm_ack_phase(const frp_runtime_punch_confirm_ack_data& request);
+    void handle_punch_confirm_ok_phase(const frp_runtime_punch_confirm_ok_data& request);
     void send_auth_failure_and_close(const std::string& message);
     void close_socket();
     void ssl_handshake();
