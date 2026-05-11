@@ -813,6 +813,8 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
             conf.flow_id    = flow->flow_id;
             conf.local_port = local_port;
             conf.peer_port  = peer_port;
+            FINFO("provider flow {} send punch_confirm local_port={} peer_port={}",
+                  flow->flow_id, local_port, peer_port);
             channel_->send_command(conf);
         });
         flow->data_channel->set_on_p2p_upgrade_failed([flow] {
@@ -859,12 +861,16 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         if (it == flows_.end()) return;
         auto flow = it->second;
         if (!flow->data_channel) return;
+        FINFO("provider flow {} recv punch_confirm local_port={} peer_port={}",
+              flow->flow_id, conf.local_port, conf.peer_port);
         flow->data_channel->on_punch_confirm(conf.peer_port, conf.local_port);
         frp_runtime_punch_confirm_ack_data ack;
         ack.command    = frp_runtime_punch_confirm_ack_command;
         ack.flow_id    = conf.flow_id;
         ack.local_port = conf.peer_port;
         ack.peer_port  = conf.local_port;
+        FINFO("provider flow {} send punch_confirm_ack local_port={} peer_port={}",
+              flow->flow_id, ack.local_port, ack.peer_port);
         channel_->send_command(ack);
         return;
     }
@@ -875,12 +881,16 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         if (it == flows_.end()) return;
         auto flow = it->second;
         if (!flow->data_channel) return;
+        FINFO("provider flow {} recv punch_confirm_ack local_port={} peer_port={}",
+              flow->flow_id, ack.local_port, ack.peer_port);
         flow->data_channel->on_punch_confirm_ack(ack.local_port, ack.peer_port);
         frp_runtime_punch_confirm_ok_data ok;
         ok.command    = frp_runtime_punch_confirm_ok_command;
         ok.flow_id    = ack.flow_id;
         ok.local_port = ack.local_port;
         ok.peer_port  = ack.peer_port;
+        FINFO("provider flow {} send punch_confirm_ok local_port={} peer_port={}",
+              flow->flow_id, ok.local_port, ok.peer_port);
         channel_->send_command(ok);
         return;
     }
@@ -889,6 +899,8 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         if (!Fundamental::io::from_json(payload, ok)) { channel_->release_obj(); return; }
         auto it = flows_.find(ok.flow_id);
         if (it == flows_.end()) return;
+        FINFO("provider flow {} recv punch_confirm_ok local_port={} peer_port={}",
+              ok.flow_id, ok.local_port, ok.peer_port);
         if (it->second->data_channel) it->second->data_channel->on_punch_confirm_ok(ok.local_port, ok.peer_port);
         return;
     }
@@ -1345,6 +1357,8 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
             conf.flow_id    = session->flow_id;
             conf.local_port = local_port;
             conf.peer_port  = peer_port;
+            FINFO("accessor session {} flow {} send punch_confirm local_port={} peer_port={}",
+                  session->session_id, session->flow_id, local_port, peer_port);
             channel_->send_command(conf);
         });
         session->data_channel->set_on_p2p_upgrade_failed([session] {
@@ -1394,12 +1408,16 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         if (it == sessions_by_flow_id_.end()) return;
         auto session = it->second;
         if (!session->data_channel) return;
+        FINFO("accessor session {} flow {} recv punch_confirm local_port={} peer_port={}",
+              session->session_id, session->flow_id, conf.local_port, conf.peer_port);
         session->data_channel->on_punch_confirm(conf.peer_port, conf.local_port);
         frp_runtime_punch_confirm_ack_data ack;
         ack.command    = frp_runtime_punch_confirm_ack_command;
         ack.flow_id    = conf.flow_id;
         ack.local_port = conf.peer_port;
         ack.peer_port  = conf.local_port;
+        FINFO("accessor session {} flow {} send punch_confirm_ack local_port={} peer_port={}",
+              session->session_id, session->flow_id, ack.local_port, ack.peer_port);
         channel_->send_command(ack);
         return;
     }
@@ -1410,12 +1428,16 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         if (it == sessions_by_flow_id_.end()) return;
         auto session = it->second;
         if (!session->data_channel) return;
+        FINFO("accessor session {} flow {} recv punch_confirm_ack local_port={} peer_port={}",
+              session->session_id, session->flow_id, ack.local_port, ack.peer_port);
         session->data_channel->on_punch_confirm_ack(ack.local_port, ack.peer_port);
         frp_runtime_punch_confirm_ok_data ok;
         ok.command    = frp_runtime_punch_confirm_ok_command;
         ok.flow_id    = ack.flow_id;
         ok.local_port = ack.local_port;
         ok.peer_port  = ack.peer_port;
+        FINFO("accessor session {} flow {} send punch_confirm_ok local_port={} peer_port={}",
+              session->session_id, session->flow_id, ok.local_port, ok.peer_port);
         channel_->send_command(ok);
         return;
     }
@@ -1424,6 +1446,8 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         if (!Fundamental::io::from_json(payload, ok)) { channel_->release_obj(); return; }
         auto it = sessions_by_flow_id_.find(ok.flow_id);
         if (it == sessions_by_flow_id_.end()) return;
+        FINFO("accessor session {} flow {} recv punch_confirm_ok local_port={} peer_port={}",
+              ok.flow_id, ok.local_port, ok.peer_port);
         if (it->second->data_channel) it->second->data_channel->on_punch_confirm_ok(ok.local_port, ok.peer_port);
         return;
     }
