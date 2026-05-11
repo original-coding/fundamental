@@ -117,6 +117,7 @@ private:
     void start_udp_punch();
     void start_p2p_read_loop();
     void do_punch_round();
+    void rebuild_symmetric_sockets();
 
     // --- p2p switch ---
     void switch_to_p2p();

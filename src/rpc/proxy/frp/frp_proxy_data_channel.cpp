@@ -601,43 +601,117 @@ void frp_proxy_data_channel::reset_keepalive_timer() {
 // start_udp_punch()
 // ---------------------------------------------------------------------------
 
+void frp_proxy_data_channel::rebuild_symmetric_sockets() {
+    // Close old sockets
+    for (auto& s : punch_sockets_) {
+        if (s) { std::error_code ec; s->close(ec); }
+    }
+    punch_sockets_.clear();
+
+    std::error_code ec;
+    std::uint16_t xxx = p2p_socket_->local_endpoint(ec).port();
+    if (ec || xxx == 0) xxx = 40000;
+    std::set<std::uint16_t> used;
+    std::mt19937 rng(std::random_device{}());
+    {
+        auto sock = std::make_unique<asio::ip::udp::socket>(executor_);
+        if (!protocal_helper::udp_bind_endpoint(*sock, xxx)) {
+            punch_sockets_.push_back(std::move(sock));
+            used.insert(xxx);
+        }
+    }
+    std::uniform_int_distribution<int> dist(
+        std::max(1024, static_cast<int>(xxx) - 128),
+        std::min(65535, static_cast<int>(xxx) + 128));
+    int attempts = 0;
+    while (static_cast<int>(punch_sockets_.size()) < kPunchSocketCount && attempts < 2000) {
+        attempts++;
+        auto port = static_cast<std::uint16_t>(dist(rng));
+        if (used.count(port)) continue;
+        auto sock = std::make_unique<asio::ip::udp::socket>(executor_);
+        if (protocal_helper::udp_bind_endpoint(*sock, port)) continue;
+        used.insert(port);
+        punch_sockets_.push_back(std::move(sock));
+    }
+
+    // Start read loops on new sockets
+    for (auto& sock : punch_sockets_) {
+        if (!sock) continue;
+        auto punch_sock_ptr = sock.get();
+        auto recv_buf = std::make_shared<std::array<char, 64>>();
+        auto recv_ep  = std::make_shared<asio::ip::udp::endpoint>();
+        auto do_recv = std::make_shared<std::function<void()>>();
+        *do_recv = [this, self = shared_from_this(), punch_sock_ptr, recv_buf, recv_ep,
+                    do_recv]() mutable {
+            if (!reference_.is_valid() || !punch_active_ || p2p_success_ || punch_done_) return;
+            punch_sock_ptr->async_receive_from(
+                asio::buffer(recv_buf->data(), recv_buf->size()), *recv_ep,
+                [this, self, punch_sock_ptr, recv_buf, recv_ep, do_recv]
+                (const std::error_code& ec, std::size_t bytes) mutable {
+                    if (!reference_.is_valid()) return;
+                    if (!ec && bytes == 6 && punch_active_ && !p2p_success_ && !punch_done_) {
+                        std::uint16_t pkt_fid = 0;
+                        std::memcpy(&pkt_fid, recv_buf->data(), 2);
+                        std::uint16_t src_port = 0;
+                        std::memcpy(&src_port, recv_buf->data() + 2, 2);
+                        std::uint16_t reflected = 0;
+                        std::memcpy(&reflected, recv_buf->data() + 4, 2);
+                        if (pkt_fid == (flow_id_ & 0xFFFF)) {
+                            std::error_code lec;
+                            std::uint16_t my_port = punch_sock_ptr->local_endpoint(lec).port();
+                            if (!lec) {
+                                auto reply = std::make_shared<std::array<std::uint8_t, 6>>();
+                                std::memcpy(reply->data(), &pkt_fid, 2);
+                                std::memcpy(reply->data() + 2, &my_port, 2);
+                                std::memcpy(reply->data() + 4, &src_port, 2);
+                                punch_sock_ptr->async_send_to(asio::buffer(*reply), *recv_ep,
+                                    [reply](const std::error_code&, std::size_t) {});
+                                confirmation_sent_ = true;
+                            }
+                            if (reflected == my_port) {
+                                punch_match_count_++;
+                                FINFO("frp_proxy_data_channel flow_id={} punch match {}/1 src={} reflected={}",
+                                      flow_id_, punch_match_count_, src_port, reflected);
+                                if (punch_match_count_ >= 1) {
+                                    for (auto& s : punch_sockets_) {
+                                        if (s.get() == punch_sock_ptr) {
+                                            p2p_socket_ = std::move(s);
+                                            break;
+                                        }
+                                    }
+                                    for (auto& s : punch_sockets_) {
+                                        if (s) { std::error_code ce; s->close(ce); }
+                                    }
+                                    punch_sockets_.clear();
+                                    punch_active_ = false;
+                                    punch_done_ = true;
+                                    p2p_success_ = true;
+                                    p2p_peer_endpoint_ = *recv_ep;
+                                    punch_timer_.cancel();
+                                    FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (symmetric) matches={}",
+                                          flow_id_, punch_match_count_);
+                                    switch_to_p2p();
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    if (punch_active_ && !p2p_success_ && !punch_done_) (*do_recv)();
+                });
+        };
+        (*do_recv)();
+    }
+    FINFO("frp_proxy_data_channel flow_id={} udp_punch symmetric round={} sockets={}",
+          flow_id_, punch_round_, punch_sockets_.size());
+}
+
 void frp_proxy_data_channel::start_udp_punch() {
     if (!reference_.is_valid() || p2p_success_ || !p2p_socket_) return;
     if (my_nat_type_ == frp_runtime_nat_type_disabled || peer_nat_type_ == frp_runtime_nat_type_disabled) return;
 
     const bool i_am_symmetric = (my_nat_type_ == frp_runtime_nat_type_symmetric);
-    std::mt19937 rng(std::random_device{}());
 
-    if (i_am_symmetric) {
-        std::error_code ec;
-        std::uint16_t xxx = p2p_socket_->local_endpoint(ec).port();
-        if (ec || xxx == 0) xxx = 40000;
-        punch_sockets_.clear();
-        std::set<std::uint16_t> used;
-        {
-            auto sock = std::make_unique<asio::ip::udp::socket>(executor_);
-            if (!protocal_helper::udp_bind_endpoint(*sock, xxx)) {
-                punch_sockets_.push_back(std::move(sock));
-                used.insert(xxx);
-            }
-        }
-        std::uniform_int_distribution<int> dist(
-            std::max(1024, static_cast<int>(xxx) - 128),
-            std::min(65535, static_cast<int>(xxx) + 128));
-        int attempts = 0;
-        while (static_cast<int>(punch_sockets_.size()) < kPunchSocketCount && attempts < 2000) {
-            attempts++;
-            auto port = static_cast<std::uint16_t>(dist(rng));
-            if (used.count(port)) continue;
-            auto sock = std::make_unique<asio::ip::udp::socket>(executor_);
-            if (protocal_helper::udp_bind_endpoint(*sock, port)) continue;
-            used.insert(port);
-            punch_sockets_.push_back(std::move(sock));
-        }
-        FINFO("frp_proxy_data_channel flow_id={} udp_punch symmetric sockets={} target={}:{}",
-              flow_id_, punch_sockets_.size(),
-              p2p_peer_endpoint_.address().to_string(), p2p_peer_endpoint_.port());
-    } else {
+    if (!i_am_symmetric) {
         punch_sockets_.clear();
         FINFO("frp_proxy_data_channel flow_id={} udp_punch full target={}:{}",
               flow_id_, p2p_peer_endpoint_.address().to_string(), p2p_peer_endpoint_.port());
@@ -646,75 +720,8 @@ void frp_proxy_data_channel::start_udp_punch() {
     punch_active_ = true;
     punch_round_  = 0;
 
-    // For symmetric side, start read loops on punch_sockets
     if (i_am_symmetric) {
-        for (auto& sock : punch_sockets_) {
-            if (!sock) continue;
-            auto punch_sock_ptr = sock.get();
-            auto recv_buf = std::make_shared<std::array<char, 64>>();
-            auto recv_ep  = std::make_shared<asio::ip::udp::endpoint>();
-            auto do_recv = std::make_shared<std::function<void()>>();
-            *do_recv = [this, self = shared_from_this(), punch_sock_ptr, recv_buf, recv_ep,
-                        do_recv]() mutable {
-                if (!reference_.is_valid() || !punch_active_ || p2p_success_ || punch_done_) return;
-                punch_sock_ptr->async_receive_from(
-                    asio::buffer(recv_buf->data(), recv_buf->size()), *recv_ep,
-                    [this, self, punch_sock_ptr, recv_buf, recv_ep, do_recv]
-                    (const std::error_code& ec, std::size_t bytes) mutable {
-                        if (!reference_.is_valid()) return;
-                        if (!ec && bytes == 6 && punch_active_ && !p2p_success_ && !punch_done_) {
-                            std::uint16_t pkt_fid = 0;
-                            std::memcpy(&pkt_fid, recv_buf->data(), 2);
-                            std::uint16_t src_port = 0;
-                            std::memcpy(&src_port, recv_buf->data() + 2, 2);
-                            std::uint16_t reflected = 0;
-                            std::memcpy(&reflected, recv_buf->data() + 4, 2);
-                            if (pkt_fid == (flow_id_ & 0xFFFF)) {
-                                // Immediately reply with correct peer_port
-                                std::error_code lec;
-                                std::uint16_t my_port = punch_sock_ptr->local_endpoint(lec).port();
-                                if (!lec) {
-                                    auto reply = std::make_shared<std::array<std::uint8_t, 6>>();
-                                    std::memcpy(reply->data(), &pkt_fid, 2);
-                                    std::memcpy(reply->data() + 2, &my_port, 2);
-                                    std::memcpy(reply->data() + 4, &src_port, 2);
-                                    punch_sock_ptr->async_send_to(asio::buffer(*reply), *recv_ep,
-                                        [reply](const std::error_code&, std::size_t) {});
-                                    confirmation_sent_ = true;
-                                }
-                                if (reflected == my_port) {
-                                    punch_match_count_++;
-                                    FINFO("frp_proxy_data_channel flow_id={} punch match {}/1 src={} reflected={}",
-                                          flow_id_, punch_match_count_, src_port, reflected);
-                                    if (punch_match_count_ >= 1) {
-                                        for (auto& s : punch_sockets_) {
-                                            if (s.get() == punch_sock_ptr) {
-                                                p2p_socket_ = std::move(s);
-                                                break;
-                                            }
-                                        }
-                                        for (auto& s : punch_sockets_) {
-                                            if (s) { std::error_code ce; s->close(ce); }
-                                        }
-                                        punch_sockets_.clear();
-                                        punch_active_ = false;
-                                        punch_done_ = true;
-                                        p2p_success_ = true;
-                                        p2p_peer_endpoint_ = *recv_ep;
-                                        punch_timer_.cancel();
-                                        FINFO("frp_proxy_data_channel flow_id={} udp_punch succeeded (symmetric) matches={}",
-                                              flow_id_, punch_match_count_);
-                                        switch_to_p2p();
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                        if (punch_active_ && !p2p_success_ && !punch_done_) (*do_recv)();
-                    });
-            };
-            (*do_recv)();
-        }
+        rebuild_symmetric_sockets();
     }
 
     do_punch_round();
@@ -782,6 +789,7 @@ void frp_proxy_data_channel::do_punch_round() {
         if (!reference_.is_valid() || !punch_active_ || p2p_success_ || punch_done_) return;
         if (*retransmit_index >= kPunchRetransmitCount) {
             punch_round_++;
+            if (i_am_symmetric) rebuild_symmetric_sockets();
             // No extra round gap: start next round immediately
             do_punch_round();
             return;
