@@ -262,12 +262,7 @@ void frp_proxy_data_channel::start_relay_read_loop() {
                 notify_disconnect_once();
                 return;
             }
-            if (p2p_success_) {
-                // Already switched to p2p -- discard relay data
-                start_relay_read_loop();
-                return;
-            }
-            // Feed into KCP
+            // Feed into KCP (works for both relay and p2p paths during transition)
             ikcp_input(kcp_.get(), relay_read_buf_.data(), static_cast<long>(bytes_read));
             auto now = static_cast<std::uint32_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -455,15 +450,10 @@ void frp_proxy_data_channel::switch_to_p2p() {
     }
     punch_sockets_.clear();
 
-    // Release relay TCP connection now that P2P is active.
-    // The server has p2p_signaled=true on this flow (set when flow_p2p_peer
-    // is sent), so the relay disconnect will be handled gracefully:
-    // clear the weak_ptr only, no flow_closed sent to the peer.
-    if (relay_upstream_) {
-        relay_upstream_->release_obj();
-        relay_upstream_ = nullptr;
-    }
-    relay_transport_ = nullptr;
+    // Keep relay alive. KCP output already routes to UDP via kcp_output_callback
+    // (checks p2p_success_). Relay stays for receiving during the transition
+    // period while the peer might not have switched yet. Released later when
+    // the session ends via release_obj() or flow_closed.
 
     std::error_code ep_ec;
     std::string local_str = p2p_socket_ ?
