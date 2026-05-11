@@ -87,17 +87,17 @@ static void run_echo_client(const std::string& host,
     std::size_t passed = 0;
     std::size_t failed = 0;
 
-    for (std::size_t i = 0; i < count; ++i) {
-        if (i > 0 && delay_ms > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-        }
+    try {
+        asio::io_context ioc;
+        tcp::socket sock(ioc);
+        tcp::resolver resolver(ioc);
+        auto endpoints = resolver.resolve(host, std::to_string(port));
+        asio::connect(sock, endpoints);
 
-        try {
-            asio::io_context ioc;
-            tcp::socket sock(ioc);
-            tcp::resolver resolver(ioc);
-            auto endpoints = resolver.resolve(host, std::to_string(port));
-            asio::connect(sock, endpoints);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i > 0 && delay_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            }
 
             // generate random payload
             std::size_t payload_size = size_gen();
@@ -118,10 +118,10 @@ static void run_echo_client(const std::string& host,
                 FERR("echo_client round={}/{} size={} FAIL (data mismatch)", i + 1, count, payload_size);
                 ++failed;
             }
-        } catch (const std::exception& e) {
-            FERR("echo_client round={}/{} FAIL ({})", i + 1, count, e.what());
-            ++failed;
         }
+    } catch (const std::exception& e) {
+        FERR("echo_client FAIL ({})", e.what());
+        failed = count;
     }
 
     FINFO("echo_client done: total={} passed={} failed={}", count, passed, failed);
