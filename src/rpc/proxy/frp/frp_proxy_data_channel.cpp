@@ -598,6 +598,9 @@ void frp_proxy_data_channel::start_udp_punch() {
                             std::uint16_t reflected = 0;
                             std::memcpy(&reflected, recv_buf->data() + 4, 2);
                             if (pkt_fid == (flow_id_ & 0xFFFF)) {
+                                FINFO("frp_proxy_data_channel flow_id={} received punch probe(sym) from={}:{} src_port={} reflected={}",
+                                      flow_id_, recv_ep->address().to_string(), recv_ep->port(),
+                                      src_port, reflected);
                                 // Immediately reply with correct peer_port
                                 std::error_code lec;
                                 std::uint16_t my_port = punch_sock_ptr->local_endpoint(lec).port();
@@ -608,6 +611,9 @@ void frp_proxy_data_channel::start_udp_punch() {
                                     std::memcpy(reply->data() + 4, &src_port, 2);
                                     punch_sock_ptr->async_send_to(asio::buffer(*reply), *recv_ep,
                                         [reply](const std::error_code&, std::size_t) {});
+                                    FINFO("frp_proxy_data_channel flow_id={} sent punch reply(sym) to={}:{} my_port={} peer_port={}",
+                                          flow_id_, recv_ep->address().to_string(), recv_ep->port(),
+                                          my_port, src_port);
                                     confirmation_sent_ = true;
                                 }
                                 if (reflected == my_port) {
@@ -800,6 +806,9 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                 std::uint16_t reflected = 0;
                 std::memcpy(&reflected, p2p_read_buf_.data() + 4, 2);
                 if (pkt_fid == (flow_id_ & 0xFFFF)) {
+                    FINFO("frp_proxy_data_channel flow_id={} received punch probe from={}:{} src_port={} reflected={}",
+                          flow_id_, p2p_recv_endpoint_.address().to_string(), p2p_recv_endpoint_.port(),
+                          src_port, reflected);
                     if (punch_active_ && !p2p_success_ && !punch_done_) {
                         // Immediately reply with correct peer_port
                         std::error_code lec;
@@ -811,6 +820,9 @@ void frp_proxy_data_channel::start_p2p_read_loop() {
                             std::memcpy(reply->data() + 4, &src_port, 2);
                             p2p_socket_->async_send_to(asio::buffer(*reply), p2p_recv_endpoint_,
                                 [reply](const std::error_code&, std::size_t) {});
+                            FINFO("frp_proxy_data_channel flow_id={} sent punch reply to={}:{} my_port={} peer_port={}",
+                                  flow_id_, p2p_recv_endpoint_.address().to_string(), p2p_recv_endpoint_.port(),
+                                  my_port, src_port);
                             confirmation_sent_ = true;
                         }
                         if (reflected == my_port) {
