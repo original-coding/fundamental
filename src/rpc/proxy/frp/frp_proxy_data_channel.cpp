@@ -611,13 +611,12 @@ void frp_proxy_data_channel::rebuild_symmetric_sockets() {
     std::error_code ec;
     std::uint16_t xxx = p2p_socket_->local_endpoint(ec).port();
     if (ec || xxx == 0) xxx = 40000;
-    std::set<std::uint16_t> used;
     std::mt19937 rng(std::random_device{}());
-    {
+    if (!punch_scanned_ports_.count(xxx)) {
         auto sock = std::make_unique<asio::ip::udp::socket>(executor_);
         if (!protocal_helper::udp_bind_endpoint(*sock, xxx)) {
             punch_sockets_.push_back(std::move(sock));
-            used.insert(xxx);
+            punch_scanned_ports_.insert(xxx);
         }
     }
     std::uniform_int_distribution<int> dist(
@@ -627,10 +626,10 @@ void frp_proxy_data_channel::rebuild_symmetric_sockets() {
     while (static_cast<int>(punch_sockets_.size()) < kPunchSocketCount && attempts < 2000) {
         attempts++;
         auto port = static_cast<std::uint16_t>(dist(rng));
-        if (used.count(port)) continue;
+        if (punch_scanned_ports_.count(port)) continue;
         auto sock = std::make_unique<asio::ip::udp::socket>(executor_);
         if (protocal_helper::udp_bind_endpoint(*sock, port)) continue;
-        used.insert(port);
+        punch_scanned_ports_.insert(port);
         punch_sockets_.push_back(std::move(sock));
     }
 
