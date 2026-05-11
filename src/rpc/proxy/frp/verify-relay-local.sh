@@ -128,24 +128,21 @@ sleep 2
 echo ""
 echo "[test] running echo client against accessor ${ACCESSOR_PORT} ..."
 
-for i in $(seq 1 30); do
-    if "${ECHO_BIN}" --mode client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
-            --count 5 --delay 100 >"${WORK_DIR}/echo_client.log" 2>&1; then
-        if grep -q "\[TEST PASSED\]" "${WORK_DIR}/echo_client.log"; then
-            echo "✅ PASSED: relay path works"
-            echo ""
-            echo "=== tail logs ==="
-            echo "--- server.log (last 6 lines) ---"
-            tail -n 6 "${WORK_DIR}/server.log"
-            echo "--- provider.log (last 6 lines) ---"
-            tail -n 6 "${WORK_DIR}/provider.log"
-            echo "--- accessor.log (last 6 lines) ---"
-            tail -n 6 "${WORK_DIR}/accessor.log"
-            exit 0
-        fi
-    fi
-    sleep 1
-done
+"${ECHO_BIN}" --mode client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
+        --count 5 --delay 100 >"${WORK_DIR}/echo_client.log" 2>&1
+
+if grep -q "\[TEST PASSED\]" "${WORK_DIR}/echo_client.log"; then
+    echo "✅ PASSED: relay path works"
+    echo ""
+    echo "=== tail logs ==="
+    echo "--- server.log (last 6 lines) ---"
+    tail -n 6 "${WORK_DIR}/server.log"
+    echo "--- provider.log (last 6 lines) ---"
+    tail -n 6 "${WORK_DIR}/provider.log"
+    echo "--- accessor.log (last 6 lines) ---"
+    tail -n 6 "${WORK_DIR}/accessor.log"
+    exit 0
+fi
 
 echo "❌ FAILED: echo test did not pass"
 echo ""
