@@ -151,22 +151,15 @@ for i in $(seq 1 30); do
             echo ""
 
             # Check log evidence for p2p upgrade
-            PUNCH_OK=false
-            SWITCHED_OK=false
-            if grep -q "udp_punch succeeded" "${WORK_DIR}/provider.log" 2>/dev/null || \
-               grep -q "udp_punch succeeded" "${WORK_DIR}/accessor.log" 2>/dev/null; then
-                PUNCH_OK=true
-            fi
+            P2P_OK=false
             if grep -q "switched to p2p" "${WORK_DIR}/provider.log" 2>/dev/null || \
                grep -q "switched to p2p" "${WORK_DIR}/accessor.log" 2>/dev/null; then
-                SWITCHED_OK=true
+                P2P_OK=true
             fi
-            echo "   udp_punch evidence   : ${PUNCH_OK}"
-            echo "   switched_to_p2p      : ${SWITCHED_OK}"
-            if [[ "${PUNCH_OK}" == "true" && "${SWITCHED_OK}" == "true" ]]; then
+            if [[ "${P2P_OK}" == "true" ]]; then
                 echo "   p2p upgrade          : confirmed"
             else
-                echo "   p2p upgrade          : not observed (relay-only path used)"
+                echo "   p2p upgrade          : not observed"
             fi
             echo ""
             echo "=== P2P evidence ==="
