@@ -464,10 +464,13 @@ void frp_proxy_data_channel::switch_to_p2p() {
     }
     punch_sockets_.clear();
 
-    // Keep relay alive. KCP output already routes to UDP via kcp_output_callback
-    // (checks p2p_success_). Relay stays for receiving during the transition
-    // period while the peer might not have switched yet. Released later when
-    // the session ends via release_obj() or flow_closed.
+    // Release relay TCP connection now that both sides have confirmed P2P.
+    // Server has p2p_signaled=true so relay disconnect won't trigger flow cleanup.
+    if (relay_upstream_) {
+        relay_upstream_->release_obj();
+        relay_upstream_ = nullptr;
+    }
+    relay_transport_ = nullptr;
 
     std::error_code ep_ec;
     std::string local_str = p2p_socket_ ?
