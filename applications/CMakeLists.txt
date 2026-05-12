@@ -7,6 +7,7 @@ if(F_BUILD_STATIC)
         add_subdirectory(rudp_delay_test_server)
         add_subdirectory(frp_proxy_server)
         add_subdirectory(frp_proxy_client)
+        add_subdirectory(frp_proxy_accessor)
+        add_subdirectory(frp_echo_test)
     endif()
 endif()
-

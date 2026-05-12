@@ -58,21 +58,36 @@ install(FILES ${FUNDAMENTAL_ASSETS_PATH}/dh2048.pem
     COMPONENT ssl-crt
     DESTINATION ${DST_INSTALL_PATH})
 
+install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/upload.sh
+    ${CMAKE_CURRENT_SOURCE_DIR}/upload.ps1
+    ${CMAKE_CURRENT_SOURCE_DIR}/upload.bat
+    ${CMAKE_CURRENT_SOURCE_DIR}/start-server.bat
+    COMPONENT scripts
+    DESTINATION ${DST_INSTALL_PATH})
+
 if(CMAKE_CONFIGURATION_TYPES) 
     add_custom_command(
         TARGET ${app_target_name}
         POST_BUILD
-        COMMAND ${CMAKE_COMMAND} --install . 
+        COMMAND ${CMAKE_COMMAND} --install .
             --prefix "$<TARGET_FILE_DIR:${app_target_name}>"
             --config $<CONFIG>
             --component ssl-crt
+        COMMAND ${CMAKE_COMMAND} --install .
+            --prefix "$<TARGET_FILE_DIR:${app_target_name}>"
+            --config $<CONFIG>
+            --component scripts
     )
-else() 
+else()
     add_custom_command(
         TARGET ${app_target_name}
         POST_BUILD
-        COMMAND ${CMAKE_COMMAND} --install . 
+        COMMAND ${CMAKE_COMMAND} --install .
             --prefix "$<TARGET_FILE_DIR:${app_target_name}>"
             --component ssl-crt
+        COMMAND ${CMAKE_COMMAND} --install .
+            --prefix "$<TARGET_FILE_DIR:${app_target_name}>"
+            --component scripts
     )
 endif()
