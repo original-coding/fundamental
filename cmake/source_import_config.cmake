@@ -9,11 +9,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/env-check.cmake)
 
 if(FUNDAMENTAL_MAIN_PROJECT)
     option(FUNDAMENTAL_ENABLE_DATABASE_SUPPORT "enable database support." ON)
-    if(ENV_CXX20_SUPPORTED)
-        option(FUNDAMENTAL_ENABLE_SCRIPT_SUPPORT "enable script support." ON)
-    else()
-        option(FUNDAMENTAL_ENABLE_SCRIPT_SUPPORT "enable script support." OFF)
-    endif()
+    option(FUNDAMENTAL_ENABLE_SCRIPT_SUPPORT "enable script support." ON)
 
     option(FUNDAMENTAL_BUILD_NETWORK "enable build of fundamental network library." ON)
     option(FUNDAMENTAL_ENABLE_INSTALL "enable install all built libs." ON)

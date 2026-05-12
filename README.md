@@ -1,6 +1,6 @@
 # fundamental
 
-C++ 工具库与网络库，为构建网络应用提供基础组件。基于 C++17/20，注重低延迟与高性能。
+C++ 工具库与网络库，为构建网络应用提供基础组件。基于 C++17，注重低延迟与高性能。
 
 ## 目录结构
 
@@ -80,7 +80,7 @@ C++ 工具库与网络库，为构建网络应用提供基础组件。基于 C++
 | Windows | MSVC 2022+ + vcpkg |
 | CMake | 3.16+（建议 3.22+） |
 | GCC | 9+ |
-| C++ 标准 | 17（脚本支持需 20） |
+| C++ 标准 | 17 |
 
 ### 三方库
 
@@ -93,8 +93,7 @@ C++ 工具库与网络库，为构建网络应用提供基础组件。基于 C++
 | **nlohmann/json** | JSON 解析与序列化 |
 | **rttr** | 运行时类型反射 |
 | **spdlog** | 日志框架 |
-| **ChaiScript** | 嵌入式脚本（需 C++20） |
-| **quickjs/quickjspp** | JavaScript 脚本（需 C++20） |
+| **quickjs/quickjspp** | JavaScript 嵌入式脚本（可选） |
 | **OpenSSL** | TLS/SSL、加密原语 |
 | **zlib** | 压缩 |
 | **SQLite3** | 嵌入式数据库 |
@@ -132,7 +131,7 @@ cd ./build-linux-debug && make -j$(nproc)
 | `FUNDAMENTAL_BUILD_RTTR` | ON | RTTR 序列化/反射 |
 | `FUNDAMENTAL_BUILD_EVENTS` | ON | 事件系统 |
 | `FUNDAMENTAL_BUILD_APPLICATIONS` | ON | 构建应用可执行文件 |
-| `FUNDAMENTAL_ENABLE_SCRIPT_SUPPORT` | ON（需 C++20） | JS/ChaiScript 脚本支持 |
+| `FUNDAMENTAL_ENABLE_SCRIPT_SUPPORT` | ON | JavaScript 脚本支持（QuickJS） |
 | `IMPORT_GTEST` | ON | 构建 Google Test 目标 |
 | `IMPORT_BENCHMARK` | ON | 构建 benchmark 目标 |
 | `DISABLE_DEBUG_SANITIZE_ADDRESS_CHECK` | OFF | 禁用 Debug 模式的 ASAN |
