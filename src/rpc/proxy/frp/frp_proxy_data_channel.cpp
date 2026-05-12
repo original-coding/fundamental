@@ -602,6 +602,7 @@ void frp_proxy_data_channel::reset_keepalive_timer() {
 // ---------------------------------------------------------------------------
 
 void frp_proxy_data_channel::rebuild_symmetric_sockets() {
+    punch_socket_gen_++;  // invalidate old do_recv callbacks
     // Close old sockets
     for (auto& s : punch_sockets_) {
         if (s) { std::error_code ec; s->close(ec); }
@@ -634,6 +635,7 @@ void frp_proxy_data_channel::rebuild_symmetric_sockets() {
     }
 
     // Start read loops on new sockets
+    int my_gen = punch_socket_gen_;
     for (auto& sock : punch_sockets_) {
         if (!sock) continue;
         auto punch_sock_ptr = sock.get();
@@ -641,8 +643,9 @@ void frp_proxy_data_channel::rebuild_symmetric_sockets() {
         auto recv_ep  = std::make_shared<asio::ip::udp::endpoint>();
         auto do_recv = std::make_shared<std::function<void()>>();
         *do_recv = [this, self = shared_from_this(), punch_sock_ptr, recv_buf, recv_ep,
-                    do_recv]() mutable {
+                    do_recv, my_gen]() mutable {
             if (!reference_.is_valid() || !punch_active_ || p2p_success_ || punch_done_) return;
+            if (punch_socket_gen_ != my_gen) return;  // sockets rebuilt, abort old loop
             punch_sock_ptr->async_receive_from(
                 asio::buffer(recv_buf->data(), recv_buf->size()), *recv_ep,
                 [this, self, punch_sock_ptr, recv_buf, recv_ep, do_recv]

@@ -190,6 +190,7 @@ private:
     std::uint16_t confirmed_local_port_ = 0;  // port pair for punch handshake
     std::uint16_t confirmed_peer_port_ = 0;
     bool port_pair_set_ = false;
+    int punch_socket_gen_ = 0;  // incremented on each rebuild_symmetric_sockets
     std::uint32_t my_rtt_ms_ = 100;    // RTT to server, default 100ms
     std::uint32_t peer_rtt_ms_ = 100;  // peer's RTT to server, default 100ms
 
