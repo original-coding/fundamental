@@ -403,10 +403,20 @@ void frp_proxy_data_channel::schedule_kcp_update() {
 void frp_proxy_data_channel::kcp_recv_loop() {
     if (!kcp_) return;
     std::array<char, 16 * 1024> buf {};
+    std::vector<char> big_buf;
     while (true) {
-        auto n = ikcp_recv(kcp_.get(), buf.data(), static_cast<int>(buf.size()));
+        int peek_size = ikcp_peeksize(kcp_.get());
+        if (peek_size < 0) break;
+        char* recv_buf = buf.data();
+        int recv_len = static_cast<int>(buf.size());
+        if (peek_size > recv_len) {
+            big_buf.resize(peek_size);
+            recv_buf = big_buf.data();
+            recv_len = peek_size;
+        }
+        auto n = ikcp_recv(kcp_.get(), recv_buf, recv_len);
         if (n < 0) break;
-        std::vector<std::uint8_t> encrypted(buf.data(), buf.data() + n);
+        std::vector<std::uint8_t> encrypted(recv_buf, recv_buf + n);
         auto plaintext = frp_kcp_decrypt(kcp_traffic_key_, encrypted);
         if (!plaintext) continue;
         if (on_data_) {
