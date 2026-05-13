@@ -53,6 +53,7 @@ Write-Host "==> Generating Windows launch scripts..."
 pushd %~dp0
 set CONFIG=%1
 if "%CONFIG%"=="" set CONFIG=server.json
+if exist "%CONFIG%.overlay" set CONFIG=%CONFIG%.overlay
 frp_proxy_server.exe --config "%CONFIG%"
 '@ | Out-File -FilePath (Join-Path $DeployDir "launch_server.bat") -Encoding ASCII
 
@@ -61,6 +62,7 @@ frp_proxy_server.exe --config "%CONFIG%"
 pushd %~dp0
 set CONFIG=%1
 if "%CONFIG%"=="" set CONFIG=provider.json
+if exist "%CONFIG%.overlay" set CONFIG=%CONFIG%.overlay
 frp_proxy_client.exe --config "%CONFIG%"
 '@ | Out-File -FilePath (Join-Path $DeployDir "launch_provider.bat") -Encoding ASCII
 
@@ -69,6 +71,7 @@ frp_proxy_client.exe --config "%CONFIG%"
 pushd %~dp0
 set CONFIG=%1
 if "%CONFIG%"=="" set CONFIG=accessor.json
+if exist "%CONFIG%.overlay" set CONFIG=%CONFIG%.overlay
 frp_proxy_accessor.exe --config "%CONFIG%"
 '@ | Out-File -FilePath (Join-Path $DeployDir "launch_accessor.bat") -Encoding ASCII
 

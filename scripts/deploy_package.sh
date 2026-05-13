@@ -30,14 +30,14 @@ for bin in "${BINARIES[@]}"; do
     echo "    ${bin}"
 done
 
-# Generate default configs for local testing (SSH 22 → proxy 42222, all 127.0.0.1)
+# Generate default configs (SSH 22 → proxy 42222)
 echo "==> Generating default configs..."
 
 cat > "${DEPLOY_DIR}/server.json" << 'SERVER_JSON'
 {
     "threads": 8,
-    "listen_tcp_port": 32000,
-    "listen_udp_port": 32001,
+    "listen_tcp_port": 15000,
+    "listen_udp_port": 15000,
     "traffic_secret": "dev-secret",
     "allowed_register_keys": ["dev-key"],
     "ssl": {
@@ -54,9 +54,9 @@ SERVER_JSON
 cat > "${DEPLOY_DIR}/provider.json" << 'PROVIDER_JSON'
 {
     "threads": 8,
-    "public_server_host": "127.0.0.1",
-    "public_server_tcp_port": 32000,
-    "public_server_udp_port": 32001,
+    "public_server_host": "server.example.com",
+    "public_server_tcp_port": 15000,
+    "public_server_udp_port": 15000,
     "traffic_secret": "dev-secret",
     "register_key": "dev-key",
     "nat_type": 2,
@@ -81,9 +81,9 @@ PROVIDER_JSON
 cat > "${DEPLOY_DIR}/accessor.json" << 'ACCESSOR_JSON'
 {
     "threads": 8,
-    "public_server_host": "127.0.0.1",
-    "public_server_tcp_port": 32000,
-    "public_server_udp_port": 32001,
+    "public_server_host": "server.example.com",
+    "public_server_tcp_port": 15000,
+    "public_server_udp_port": 15000,
     "traffic_secret": "dev-secret",
     "register_key": "dev-key",
     "nat_type": 2,
@@ -125,6 +125,9 @@ cat > "${DEPLOY_DIR}/launch_server.sh" << 'EOF'
 # Usage: ./launch_server.sh [config_path]
 
 CONFIG="${1:-server.json}"
+if [ -f "${CONFIG}.overlay" ]; then
+    CONFIG="${CONFIG}.overlay"
+fi
 cd "$(dirname "$0")"
 exec ./frp_proxy_server --config "${CONFIG}"
 EOF
@@ -136,6 +139,9 @@ cat > "${DEPLOY_DIR}/launch_provider.sh" << 'EOF'
 # Usage: ./launch_provider.sh [config_path]
 
 CONFIG="${1:-provider.json}"
+if [ -f "${CONFIG}.overlay" ]; then
+    CONFIG="${CONFIG}.overlay"
+fi
 cd "$(dirname "$0")"
 exec ./frp_proxy_client --config "${CONFIG}"
 EOF
@@ -147,6 +153,9 @@ cat > "${DEPLOY_DIR}/launch_accessor.sh" << 'EOF'
 # Usage: ./launch_accessor.sh [config_path]
 
 CONFIG="${1:-accessor.json}"
+if [ -f "${CONFIG}.overlay" ]; then
+    CONFIG="${CONFIG}.overlay"
+fi
 cd "$(dirname "$0")"
 exec ./frp_proxy_accessor --config "${CONFIG}"
 EOF
