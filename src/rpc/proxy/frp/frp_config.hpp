@@ -40,6 +40,7 @@ struct frp_provider_service_config {
     std::string service_name;
     std::string target_host;
     std::uint16_t target_port = 0;
+    bool enable_p2p = true;
     virtual ~frp_provider_service_config() = default;
     RTTR_ENABLE()
 };
@@ -48,7 +49,7 @@ struct frp_accessor_listener_config {
     std::string service_name;
     std::string listen_host;
     std::uint16_t listen_port = 0;
-    std::uint8_t nat_type     = frp_runtime_nat_type_full;
+    bool enable_p2p           = true;
     virtual ~frp_accessor_listener_config() = default;
     RTTR_ENABLE()
 };
@@ -181,7 +182,6 @@ inline frp_accessor_config make_example_accessor_config() {
     listener.service_name = "demo-web";
     listener.listen_host  = "127.0.0.1";
     listener.listen_port  = 28080;
-    listener.nat_type   = frp_runtime_nat_type_full;
     config.listeners.push_back(std::move(listener));
     return config;
 }
@@ -326,14 +326,15 @@ inline void __register_frp_config_reflect_type__() {
         .constructor()(rttr::policy::ctor::as_object)
         .property("service_name", &frp_provider_service_config::service_name)
         .property("target_host", &frp_provider_service_config::target_host)
-        .property("target_port", &frp_provider_service_config::target_port);
+        .property("target_port", &frp_provider_service_config::target_port)
+        .property("enable_p2p", &frp_provider_service_config::enable_p2p);
 
     rttr::registration::class_<frp_accessor_listener_config>("network::proxy::frp_accessor_listener_config")
         .constructor()(rttr::policy::ctor::as_object)
         .property("service_name", &frp_accessor_listener_config::service_name)
         .property("listen_host", &frp_accessor_listener_config::listen_host)
         .property("listen_port", &frp_accessor_listener_config::listen_port)
-        .property("nat_type", &frp_accessor_listener_config::nat_type);
+        .property("enable_p2p", &frp_accessor_listener_config::enable_p2p);
 
     rttr::registration::class_<frp_public_server_config>("network::proxy::frp_public_server_config")
         .constructor()(rttr::policy::ctor::as_object)

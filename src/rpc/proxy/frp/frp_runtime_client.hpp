@@ -182,6 +182,8 @@ private:
         std::uint16_t listen_port = 0;
         std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
         std::uint32_t provider_startup_rtt_ms = 100;
+        bool enable_p2p = true;
+        bool provider_enable_p2p = true;
         asio::ip::tcp::acceptor acceptor;
 
         listener_runtime(const asio::any_io_executor& executor,

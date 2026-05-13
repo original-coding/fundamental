@@ -24,6 +24,7 @@ struct frp_runtime_service_directory_entry {
     std::string service_name;
     std::string provider_uuid;
     std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
+    bool enable_p2p = true;
 };
 
 class frp_runtime_public_server : public std::enable_shared_from_this<frp_runtime_public_server>,
@@ -132,6 +133,7 @@ private:
     struct flow_runtime_state {
         std::uint32_t flow_id = 0;
         std::string service_name;
+        bool enable_p2p = true;
         std::string provider_uuid;
         std::string accessor_uuid;
         std::uint8_t transport = frp_runtime_transport_invalid;

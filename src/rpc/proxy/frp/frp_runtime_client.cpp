@@ -72,6 +72,7 @@ struct frp_runtime_provider_agent::provider_flow_runtime {
     std::uint32_t flow_id = 0;
     std::string service_name;
     std::string accessor_uuid;
+    bool enable_p2p = true;
     std::shared_ptr<frp_proxy_data_channel> data_channel;
     asio::ip::tcp::socket backend_socket;
     asio::ip::tcp::resolver resolver;
@@ -93,6 +94,8 @@ struct frp_runtime_accessor_agent::accessor_session_context {
     std::string service_name;
     std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
     std::uint32_t provider_startup_rtt_ms = 100;
+    bool enable_p2p = true;
+    bool provider_enable_p2p = true;
     asio::ip::tcp::socket local_socket;
     std::shared_ptr<frp_proxy_data_channel> data_channel;
     std::array<char, 16 * 1024> read_buf {};
@@ -669,7 +672,8 @@ void frp_runtime_provider_agent::start_provider_backend_connect(const std::share
                     // Start endpoint probe for P2P if capable.
                     // The probe itself registers as implicit upgrade_request with the server.
                     if (probed_nat_type_ != frp_runtime_nat_type_disabled &&
-                        config_.public_server_udp_port != 0 && flow->data_channel) {
+                        config_.public_server_udp_port != 0 && flow->data_channel &&
+                        flow->enable_p2p) {
                         flow->data_channel->set_my_rtt_ms(startup_rtt_ms_);
                         flow->data_channel->start_p2p_upgrade();
                     }
@@ -731,6 +735,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         for (const auto& service : config_.services) {
             frp_runtime_service_registration_data data;
             data.service_name = service.service_name;
+            data.enable_p2p   = service.enable_p2p;
             request.services.push_back(std::move(data));
         }
         channel_->send_command(request);
@@ -768,6 +773,7 @@ void frp_runtime_provider_agent::process_command(const frp_runtime_command_base&
         flow->flow_id       = request.flow_id;
         flow->service_name  = request.service_name;
         flow->accessor_uuid = request.accessor_uuid;
+        flow->enable_p2p    = service->enable_p2p;
         flows_[flow->flow_id] = flow;
 
         // Always relay-first: create frp_proxy_data_channel
@@ -1144,7 +1150,9 @@ void frp_runtime_accessor_agent::reconcile_listeners(const std::vector<frp_runti
 
         auto listener = std::make_shared<listener_runtime>(reconnect_timer_.get_executor(), listener_config.service_name,
                                                            listener_config.listen_host, listener_config.listen_port);
-        listener->provider_nat_type = service_it->second.provider_nat_type;
+        listener->enable_p2p            = listener_config.enable_p2p;
+        listener->provider_enable_p2p   = service_it->second.enable_p2p;
+        listener->provider_nat_type     = service_it->second.provider_nat_type;
         listener->provider_startup_rtt_ms = service_it->second.provider_startup_rtt_ms;
         std::error_code ec;
         auto address = asio::ip::make_address(listener_config.listen_host, ec);
@@ -1207,8 +1215,10 @@ void frp_runtime_accessor_agent::start_accept_loop(const std::shared_ptr<listene
                     socket.close(close_ec);
                 } else {
                     auto session = std::make_shared<accessor_session_context>(next_session_id_++, std::move(socket));
-                    session->service_name = listener->service_name;
-                    session->provider_nat_type = listener->provider_nat_type;
+                    session->service_name        = listener->service_name;
+                    session->enable_p2p          = listener->enable_p2p;
+                    session->provider_enable_p2p = listener->provider_enable_p2p;
+                    session->provider_nat_type   = listener->provider_nat_type;
                     session->provider_startup_rtt_ms = listener->provider_startup_rtt_ms;
                     pending_sessions_[session->session_id] = session;
                     request_flow(session);
@@ -1386,7 +1396,8 @@ void frp_runtime_accessor_agent::process_command(const frp_runtime_command_base&
         // Initiate p2p upgrade if both sides are capable
         if (probed_nat_type_ != frp_runtime_nat_type_disabled &&
             session->provider_nat_type != frp_runtime_nat_type_disabled &&
-            config_.public_server_udp_port != 0 && session->data_channel) {
+            config_.public_server_udp_port != 0 && session->data_channel &&
+            session->enable_p2p && session->provider_enable_p2p) {
             frp_runtime_p2p_upgrade_request_data upgrade_req;
             upgrade_req.command = frp_runtime_p2p_upgrade_request_command;
             upgrade_req.flow_id = session->flow_id;

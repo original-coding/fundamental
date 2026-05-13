@@ -230,8 +230,9 @@ bool frp_runtime_public_server::register_provider_services(
     provider.services.clear();
     for (const auto& service : services) {
         provider.services.insert(service.service_name);
-        registry[service.service_name] =
-            frp_runtime_service_directory_entry { service.service_name, session->get_uuid(), session->get_nat_type() };
+        registry[service.service_name] = {
+            service.service_name, session->get_uuid(), session->get_nat_type(), service.enable_p2p
+        };
     }
     return true;
 }
@@ -262,6 +263,7 @@ std::vector<frp_runtime_visible_service_data> frp_runtime_public_server::list_se
             visible.service_name           = service.service_name;
             visible.provider_uuid          = service.provider_uuid;
             visible.provider_nat_type      = service.provider_nat_type;
+            visible.enable_p2p             = service.enable_p2p;
             if (auto pit = providers_by_uuid_.find(service.provider_uuid); pit != providers_by_uuid_.end()) {
                 visible.provider_startup_rtt_ms = pit->second.startup_rtt_ms;
             }
@@ -326,6 +328,7 @@ frp_runtime_create_flow_response_data frp_runtime_public_server::create_flow(
         flow_runtime_state flow;
         flow.flow_id       = flow_id;
         flow.service_name  = service_it->second.service_name;
+        flow.enable_p2p    = service_it->second.enable_p2p;
         flow.provider_uuid = service_it->second.provider_uuid;
         flow.accessor_uuid = accessor_session->get_uuid();
 
@@ -547,9 +550,10 @@ bool frp_runtime_public_server::register_p2p_probe(const frp_runtime_p2p_probe_d
                 std::uint8_t p_nat = provider_it->second.nat_type;
                 std::uint8_t a_nat = accessor_it->second.nat_type;
                 if (p_nat == frp_runtime_nat_type_disabled || a_nat == frp_runtime_nat_type_disabled ||
-                    (p_nat == frp_runtime_nat_type_symmetric && a_nat == frp_runtime_nat_type_symmetric)) {
-                    FINFO("register_p2p_probe flow_id={} p2p not viable provider_nat={} accessor_nat={}",
-                          data.flow_id, static_cast<int>(p_nat), static_cast<int>(a_nat));
+                    (p_nat == frp_runtime_nat_type_symmetric && a_nat == frp_runtime_nat_type_symmetric) ||
+                    !flow.enable_p2p) {
+                    FINFO("register_p2p_probe flow_id={} p2p not viable provider_nat={} accessor_nat={} enable_p2p={}",
+                          data.flow_id, static_cast<int>(p_nat), static_cast<int>(a_nat), flow.enable_p2p);
                     return true; // p2p not viable, probe recorded but no coordination
                 }
             }
@@ -688,9 +692,10 @@ bool frp_runtime_public_server::handle_p2p_upgrade_request(
         const bool provider_p2p_capable = (provider_nat != frp_runtime_nat_type_disabled);
         const bool both_symmetric = (accessor_nat == frp_runtime_nat_type_symmetric &&
                                      provider_nat == frp_runtime_nat_type_symmetric);
-        if (!accessor_p2p_capable || !provider_p2p_capable || both_symmetric) {
-            FINFO("handle_p2p_upgrade_request flow_id={} p2p not viable accessor_nat={} provider_nat={}",
-                  data.flow_id, static_cast<int>(accessor_nat), static_cast<int>(provider_nat));
+        if (!accessor_p2p_capable || !provider_p2p_capable || both_symmetric ||
+            !flow.enable_p2p) {
+            FINFO("handle_p2p_upgrade_request flow_id={} p2p not viable accessor_nat={} provider_nat={} enable_p2p={}",
+                  data.flow_id, static_cast<int>(accessor_nat), static_cast<int>(provider_nat), flow.enable_p2p);
             return true; // silently skip -- relay continues
         }
         both_requested = true;

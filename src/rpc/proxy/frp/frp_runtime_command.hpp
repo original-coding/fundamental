@@ -129,6 +129,7 @@ struct frp_runtime_join_response_data : frp_runtime_command_base {
 
 struct frp_runtime_service_registration_data {
     std::string service_name;
+    bool enable_p2p = true;
     virtual ~frp_runtime_service_registration_data() = default;
     RTTR_ENABLE()
 };
@@ -153,6 +154,7 @@ struct frp_runtime_visible_service_data {
     std::string provider_uuid;
     std::uint8_t provider_nat_type = frp_runtime_nat_type_disabled;
     std::uint32_t provider_startup_rtt_ms = 100;
+    bool enable_p2p = true;
     virtual ~frp_runtime_visible_service_data() = default;
     RTTR_ENABLE()
 };
@@ -330,7 +332,8 @@ inline void __register_frp_runtime_reflect_type__() {
     rttr::registration::class_<frp_runtime_service_registration_data>(
         "network::proxy::frp_runtime_service_registration_data")
         .constructor()(rttr::policy::ctor::as_object)
-        .property("service_name", &frp_runtime_service_registration_data::service_name);
+        .property("service_name", &frp_runtime_service_registration_data::service_name)
+        .property("enable_p2p", &frp_runtime_service_registration_data::enable_p2p);
 
     rttr::registration::class_<frp_runtime_register_services_request_data>(
         "network::proxy::frp_runtime_register_services_request_data")
@@ -352,7 +355,8 @@ inline void __register_frp_runtime_reflect_type__() {
         .property("service_name", &frp_runtime_visible_service_data::service_name)
         .property("provider_uuid", &frp_runtime_visible_service_data::provider_uuid)
         .property("provider_nat_type", &frp_runtime_visible_service_data::provider_nat_type)
-        .property("provider_startup_rtt_ms", &frp_runtime_visible_service_data::provider_startup_rtt_ms);
+        .property("provider_startup_rtt_ms", &frp_runtime_visible_service_data::provider_startup_rtt_ms)
+        .property("enable_p2p", &frp_runtime_visible_service_data::enable_p2p);
 
     rttr::registration::class_<frp_runtime_fetch_services_response_data>(
         "network::proxy::frp_runtime_fetch_services_response_data")

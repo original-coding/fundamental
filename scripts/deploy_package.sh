@@ -71,7 +71,8 @@ cat > "${DEPLOY_DIR}/provider.json" << 'PROVIDER_JSON'
         {
             "service_name": "ssh",
             "target_host": "127.0.0.1",
-            "target_port": 22
+            "target_port": 22,
+            "enable_p2p": true
         }
     ]
 }
@@ -98,7 +99,7 @@ cat > "${DEPLOY_DIR}/accessor.json" << 'ACCESSOR_JSON'
             "service_name": "ssh",
             "listen_host": "127.0.0.1",
             "listen_port": 42222,
-            "nat_type": 2
+            "enable_p2p": true
         }
     ]
 }
