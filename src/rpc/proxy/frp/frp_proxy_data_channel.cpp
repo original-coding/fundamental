@@ -285,6 +285,10 @@ void frp_proxy_data_channel::start() {
             open_req.flow_id = flow_id_;
             open_req.uuid    = uuid_;
             auto pkt = packet_frp_runtime_command_data(open_req);
+            if (!pkt) {
+                notify_disconnect_once();
+                return;
+            }
             relay_write_queue_.push_back(std::move(pkt));
             relay_do_write();
 

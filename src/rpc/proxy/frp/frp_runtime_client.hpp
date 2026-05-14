@@ -42,6 +42,7 @@ public:
     template <typename CommandData>
     void send_command(const CommandData& data) {
         auto packet = packet_frp_runtime_command_data(data);
+        if (!packet) return;
         asio::post(executor_, [this, self = shared_from_this(), packet = std::move(packet)]() mutable {
             if (!reference_.is_valid() || !upstream_) return;
             write_queue_.push_back(std::move(packet));

@@ -277,8 +277,14 @@ struct frp_runtime_ping_response_data : frp_runtime_command_base {
 
 template <typename CommandData>
 inline std::shared_ptr<std::string> packet_frp_runtime_command_data(const CommandData& data) {
-    auto ret         = std::make_shared<std::string>();
-    auto encode_data = Fundamental::io::to_json(data);
+    auto ret = std::make_shared<std::string>();
+    std::string encode_data;
+    try {
+        encode_data = Fundamental::io::to_json(data);
+    } catch (const std::exception& e) {
+        FERR("packet_frp_runtime_command_data to_json failed: {}", e.what());
+        return nullptr;
+    }
     ret->resize(4 + encode_data.size());
     std::uint32_t data_size = static_cast<std::uint32_t>(encode_data.size());
     Fundamental::net_buffer_copy(&data_size, ret->data(), 4);
