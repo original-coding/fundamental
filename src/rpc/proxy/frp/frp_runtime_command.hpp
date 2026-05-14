@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fundamental/basic/endian_utils.hpp"
+#include "fundamental/basic/log.h"
 #include "fundamental/rttr_handler/deserializer.h"
 #include "fundamental/rttr_handler/serializer.h"
 
