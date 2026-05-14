@@ -646,7 +646,7 @@ void frp_runtime_provider_agent::start_provider_backend_connect(const std::share
                 failed.command = frp_runtime_flow_failed_command;
                 failed.flow_id = flow->flow_id;
                 failed.reason  = frp_runtime_flow_failed_backend_connect_failed;
-                failed.message = safe_error_code_message(ec);
+                failed.message = ec.message();
                 flow->closed   = true;
                 flows_.erase(flow->flow_id);
                 channel_->send_command(failed);
@@ -662,7 +662,7 @@ void frp_runtime_provider_agent::start_provider_backend_connect(const std::share
                         failed.command = frp_runtime_flow_failed_command;
                         failed.flow_id = flow->flow_id;
                         failed.reason  = frp_runtime_flow_failed_backend_connect_failed;
-                        failed.message = safe_error_code_message(ec);
+                        failed.message = ec.message();
                         flow->closed   = true;
                         flows_.erase(flow->flow_id);
                         channel_->send_command(failed);
@@ -1021,7 +1021,7 @@ void frp_runtime_provider_agent::handle_backend_write_queue(const std::shared_pt
                               failed.command = frp_runtime_flow_failed_command;
                               failed.flow_id = flow->flow_id;
                               failed.reason  = frp_runtime_flow_failed_backend_connect_failed;
-                              failed.message = safe_error_code_message(ec);
+                              failed.message = ec.message();
                               if (flow->data_channel) {
                                   flow->data_channel->release_obj();
                                   flow->data_channel = nullptr;

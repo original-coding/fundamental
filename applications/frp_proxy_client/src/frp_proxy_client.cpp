@@ -6,10 +6,17 @@
 #include "fundamental/basic/arg_parser.hpp"
 #include "fundamental/basic/log.h"
 
+#ifdef _MSC_VER
+#include <windows.h>
+#endif
+
 using namespace network;
 using namespace network::proxy;
 
 int main(int argc, char* argv[]) {
+#ifdef _MSC_VER
+    SetThreadUILanguage(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
+#endif
     Fundamental::Logger::LoggerInitOptions options;
     options.minimumLevel = Fundamental::LogLevel::debug;
     options.logFormat    = "%^[%L]%H:%M:%S.%e%$[%t] %v ";

@@ -7,6 +7,10 @@
 #include <future>
 #include <stdexcept>
 #include <thread>
+
+#ifdef _MSC_VER
+#include <windows.h>
+#endif
 namespace network
 {
 
@@ -39,6 +43,9 @@ void io_context_pool::start() {
         threadpool.Spawn(1);
         threadpool.Enqueue([this, i] {
             Fundamental::Utils::SetThreadName(Fundamental::StringFormat("io_loop_{}", i));
+#ifdef _MSC_VER
+            SetThreadUILanguage(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
+#endif
             try {
                 io_contexts_[i]->run();
             } catch (const std::exception& e) {
