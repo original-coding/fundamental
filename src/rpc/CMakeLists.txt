@@ -47,6 +47,8 @@ target_include_directories(${lib_name} PUBLIC
     $<INSTALL_INTERFACE:${fundamental_install_prefix}>
 )
 
+target_compile_options(${lib_name} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4506>)
+
 if(FUNDAMENTAL_ENABLE_INSTALL)
     native_install_lib_package(${lib_name} "${FUNDAMENTAL_VERSION}" BuildSettings)
 endif()
