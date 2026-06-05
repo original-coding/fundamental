@@ -165,7 +165,7 @@ private:
 
     // endpoint probe
     asio::steady_timer endpoint_probe_timer_;
-    int endpoint_probe_attempts_ = 0;
+    std::size_t endpoint_probe_attempts_ = 0;
     bool probing_ = false;
     std::string my_external_ip_;
     std::uint16_t my_external_port_ = 0;

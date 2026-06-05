@@ -662,7 +662,7 @@ struct frp_runtime_unified_client_agent::provider_flow_runtime {
     std::uint32_t expected_punch_seq = 0;
     asio::steady_timer handshake_timer;
     explicit provider_flow_runtime(const asio::any_io_executor& e)
-        : backend_socket(e), resolver(e), punch_retry_timer(e), handshake_timer(e) {}
+        : punch_retry_timer(e), backend_socket(e), resolver(e), handshake_timer(e) {}
 };
 
 struct frp_runtime_unified_client_agent::accessor_session_context {
