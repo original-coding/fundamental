@@ -87,42 +87,48 @@ void websocket_forward_connection::start_ws_proxy() {
         }
     });
 
+    const char* error_reason = nullptr;
     do {
         // check head
         if (parse_context.head1 != response_context.kWebsocketMethod ||
             parse_context.head3 != response_context.kHttpVersion) {
+            error_reason = "invalid HTTP method or version";
             goto HAS_ANY_PROTOCAL_ERROR;
         }
         // check upgrade
         {
-            auto iter = parse_context.headers.find(parse_context.kHttpUpgradeStr);
-            if (iter == parse_context.headers.end() ||
-                (Fundamental::StringToLower(iter->second), iter->second != parse_context.kHttpWebsocketStr)) {
+            auto [header_value, has_found] = parse_context.get_header(parse_context.kHttpUpgradeStr);
+            if (!has_found ||
+                (Fundamental::StringToLower(header_value), header_value != parse_context.kHttpWebsocketStr)) {
+                error_reason = "missing or invalid Upgrade header";
                 goto HAS_ANY_PROTOCAL_ERROR;
             }
         }
         // check connection
         {
-            auto iter = parse_context.headers.find(parse_context.kHttpConnection);
-            if (iter == parse_context.headers.end() ||
-                (Fundamental::StringToLower(iter->second), iter->second != parse_context.kHttpUpgradeValueStr)) {
+            auto [header_value, has_found] = parse_context.get_header(parse_context.kHttpConnection);
+            if (!has_found ||
+                (Fundamental::StringToLower(header_value), header_value != parse_context.kHttpUpgradeValueStr)) {
+                error_reason = "missing or invalid Connection header";
                 goto HAS_ANY_PROTOCAL_ERROR;
             }
         }
         // check ws version
         {
-            auto iter = parse_context.headers.find(parse_context.kWebsocketRequestVersion);
-            if (iter == parse_context.headers.end() || iter->second != parse_context.kWebsocketVersion) {
+            auto [header_value, has_found] = parse_context.get_header(parse_context.kWebsocketRequestVersion);
+            if (!has_found || header_value != parse_context.kWebsocketVersion) {
+                error_reason = "missing or invalid Sec-WebSocket-Version header";
                 goto HAS_ANY_PROTOCAL_ERROR;
             }
         }
         std::string ws_key;
         {
-            auto iter = parse_context.headers.find(parse_context.kWebsocketRequestKey);
-            if (iter == parse_context.headers.end()) {
+            auto [header_value, has_found] = parse_context.get_header(parse_context.kWebsocketRequestKey);
+            if (!has_found) {
+                error_reason = "missing Sec-WebSocket-Key header";
                 goto HAS_ANY_PROTOCAL_ERROR;
             }
-            ws_key = iter->second;
+            ws_key = header_value;
         }
         {
 
@@ -147,6 +153,7 @@ void websocket_forward_connection::start_ws_proxy() {
             }
         }
         if (proxy_host.empty() || proxy_service.empty()) {
+            error_reason = "no route available for the requested URI";
             goto HAS_ANY_PROTOCAL_ERROR;
         }
 
@@ -172,7 +179,7 @@ void websocket_forward_connection::start_ws_proxy() {
 
     } while (0);
 HAS_ANY_PROTOCAL_ERROR:
-    *response_data = response_context.default_error_response();
+    *response_data = response_context.default_error_response(error_reason ? error_reason : "");
 }
 
 void websocket_forward_connection::start_ws_proxy_to_next_layer() {

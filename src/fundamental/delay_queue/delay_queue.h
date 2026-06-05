@@ -143,7 +143,7 @@ public:
     DelayQueue(const DelayQueue&)            = delete;
     DelayQueue& operator=(const DelayQueue&) = delete;
     // provide the default timer queue; do not access this object in the constructor/destructor of a static instance.
-    [[__nodiscard__]] static DelayQueue& GlobalInstance();
+    [[nodiscard]] static DelayQueue& GlobalInstance();
 
 private:
     Imp* pImp = nullptr;

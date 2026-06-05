@@ -4,6 +4,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+
 namespace network
 {
 namespace websocket
@@ -81,13 +82,15 @@ struct http_handler_context {
     */
     std::tuple<parse_status, std::size_t> parse(const void* data, std::size_t len);
     std::string encode() const;
-    static std::string default_error_response();
+    static std::string default_error_response(const std::string& error_reason = "");
     static std::tuple<std::string, std::unordered_map<std::string, std::string>> parse_query_params(
         const std::string& uri);
+    std::tuple<std::string, bool> get_header(std::string header_name);
     std::string head1;
     std::string head2;
     std::string head3;
     std::unordered_map<std::string, std::string> headers;
+    std::unordered_map<std::string, std::string> lower_headers;
     std::string parse_cache;
 };
 

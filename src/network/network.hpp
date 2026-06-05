@@ -158,11 +158,7 @@ struct protocal_helper {
 #endif
     }
     static asio::ip::udp::endpoint make_udp_endpoint(std::uint16_t port) {
-#ifndef NETWORK_IPV4_ONLY
-        return asio::ip::udp::endpoint(asio::ip::udp::v6(), port);
-#else
         return asio::ip::udp::endpoint(asio::ip::udp::v4(), port);
-#endif
     }
     static std::error_code udp_bind_endpoint(asio::ip::udp::socket& udp_socket,
                                              const asio::ip::udp::endpoint& end_point) {
@@ -174,11 +170,6 @@ struct protocal_helper {
         }
         if (end_point.port() != 0) udp_socket.set_option(asio::ip::udp::socket::reuse_address(true), ec);
         if (ec) return ec;
-#ifndef NETWORK_IPV4_ONLY
-        std::error_code ignore_ec;
-        asio::ip::v6_only v6_option(false);
-        udp_socket.set_option(v6_option, ignore_ec);
-#endif
         udp_socket.bind(end_point, ec);
         return ec;
     }

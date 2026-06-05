@@ -7,6 +7,9 @@
 *.txt.user
 CMakeLists.txt.user*
 *.pyc
+.codex
+.ai_workspace
+.dev-local-frp/
 
 /assets/*.key
 /assets/*.crt

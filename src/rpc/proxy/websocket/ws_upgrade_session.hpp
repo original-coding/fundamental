@@ -104,8 +104,9 @@ protected:
                                                 http_response_context.head3);
                 break;
             }
-            auto iter = http_response_context.headers.find(http_response_context.kWebsocketResponseAccept);
-            if (iter == http_response_context.headers.end()) {
+            auto [header_value, has_found] =
+                http_response_context.get_header(http_response_context.kWebsocketResponseAccept);
+            if (!has_found) {
                 ec  = std::make_error_code(std::errc::bad_message);
                 msg = Fundamental::StringFormat("invalid http response  miss {} header",
                                                 http_response_context.kWebsocketResponseAccept);
@@ -113,9 +114,9 @@ protected:
             }
             auto verify_str =
                 websocket::ws_utils::generateServerAcceptKey(network::websocket::ws_utils::generateSessionKey(this));
-            if (verify_str != iter->second) {
+            if (verify_str != header_value) {
                 ec  = std::make_error_code(std::errc::permission_denied);
-                msg = Fundamental::StringFormat("ws verify failed recv: {} != need:{}", iter->second, verify_str);
+                msg = Fundamental::StringFormat("ws verify failed recv: {} != need:{}", header_value, verify_str);
                 break;
             }
         } while (0);

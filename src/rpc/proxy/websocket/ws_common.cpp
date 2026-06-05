@@ -330,9 +330,13 @@ std::tuple<http_handler_context::parse_status, std::size_t> http_handler_context
             if (value_pos >= next_line_pos) {
                 goto HTTP_PARSE_FAILED;
             }
-            auto key   = parse_cache.substr(parse_pos, key_pos - parse_pos);
-            auto value = parse_cache.substr(value_pos, next_line_pos - value_pos);
+            auto key       = parse_cache.substr(parse_pos, key_pos - parse_pos);
+            auto value     = parse_cache.substr(value_pos, next_line_pos - value_pos);
+            auto lower_key = key;
+            Fundamental::StringToLower(lower_key);
+            lower_headers.emplace(lower_key, value);
             headers.emplace(std::move(key), std::move(value));
+
             parse_pos = next_line_pos + line_len;
         }
         FDEBUG("\n{}", parse_cache);
@@ -364,9 +368,15 @@ std::string http_handler_context::encode() const {
     return ret;
 }
 
-std::string http_handler_context::default_error_response() {
-    return std::string(
-        "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"WebSocket Access\"\r\nContent-Length: 0\r\n\r\n");
+std::string http_handler_context::default_error_response(const std::string& error_reason) {
+    if (error_reason.empty()) {
+        return std::string(
+            "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"WebSocket Access\"\r\nContent-Length: 0\r\n\r\n");
+    }
+    auto body = "{\"error\":\"" + error_reason + "\"}";
+    return "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"WebSocket Access\"\r\nContent-Type: "
+           "application/json\r\nContent-Length: " +
+           std::to_string(body.size()) + "\r\n\r\n" + body;
 }
 
 std::tuple<std::string, std::unordered_map<std::string, std::string>> http_handler_context::parse_query_params(
@@ -389,6 +399,19 @@ std::tuple<std::string, std::unordered_map<std::string, std::string>> http_handl
         }
     }
     return std::make_tuple(request_uri, query_params);
+}
+
+std::tuple<std::string, bool> http_handler_context::get_header(std::string header_name) {
+    {
+        auto iter = headers.find(header_name);
+        if (iter != headers.end()) return std::make_tuple(iter->second, true);
+    }
+    {
+        Fundamental::StringToLower(header_name);
+        auto iter = lower_headers.find(header_name);
+        if (iter != lower_headers.end()) return std::make_tuple(iter->second, true);
+    }
+    return std::make_tuple("", false);
 }
 
 } // namespace websocket
