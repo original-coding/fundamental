@@ -316,42 +316,6 @@ bool frp_runtime_public_server::forward_flow_closed(const std::shared_ptr<frp_ru
     return true;
 }
 
-bool frp_runtime_public_server::forward_flow_data(const std::shared_ptr<frp_runtime_signal_session>& session,
-                                                  const frp_runtime_flow_data_data& data,
-                                                  std::string& error_message) {
-    std::shared_ptr<frp_runtime_signal_session> peer_session;
-    {
-        std::scoped_lock<std::mutex> locker(runtime_mutex_);
-        auto flow_it = flows_by_id_.find(data.flow_id);
-        if (flow_it == flows_by_id_.end()) {
-            error_message = "unknown flow_id";
-            return false;
-        }
-        const auto& flow = flow_it->second;
-        if (session && flow.provider_uuid == session->get_uuid()) {
-            auto accessor_it = clients_by_uuid_.find(flow.accessor_uuid);
-            if (accessor_it != clients_by_uuid_.end()) peer_session = accessor_it->second.session.lock();
-        } else if (session && flow.accessor_uuid == session->get_uuid()) {
-            if (!flow.provider_ready) {
-                error_message = "provider not ready";
-                return false;
-            }
-            auto provider_it = clients_by_uuid_.find(flow.provider_uuid);
-            if (provider_it != clients_by_uuid_.end()) peer_session = provider_it->second.session.lock();
-        } else {
-            error_message = "flow uuid mismatch";
-            return false;
-        }
-    }
-    if (!peer_session) {
-        error_message = "peer session offline";
-        return false;
-    }
-    peer_session->send_command(data);
-    return true;
-}
-
-
 void frp_runtime_public_server::relay_punch_message(const std::shared_ptr<frp_runtime_signal_session>& session,
                                                       const frp_proxy_command_data& base,
                                                       const std::string& raw_payload) {
@@ -810,15 +774,6 @@ void frp_runtime_signal_session::handle_authenticated_phase(const frp_runtime_co
         handle_flow_failed_phase(request);
         return;
     }
-    case frp_runtime_flow_data_command: {
-        frp_runtime_flow_data_data request;
-        if (!Fundamental::io::from_json(payload, request)) {
-            release_obj();
-            return;
-        }
-        handle_flow_data_phase(request);
-        return;
-    }
     case frp_runtime_flow_closed_command: {
         frp_runtime_flow_closed_data request;
         if (!Fundamental::io::from_json(payload, request)) {
@@ -826,13 +781,6 @@ void frp_runtime_signal_session::handle_authenticated_phase(const frp_runtime_co
             return;
         }
         handle_flow_closed_phase(request);
-        return;
-    }
-    case frp_runtime_ping_request_command: {
-        frp_runtime_ping_response_data response;
-        response.command = frp_runtime_ping_response_command;
-        send_command(response);
-        read_next_command();
         return;
     }
     case frp_runtime_punch_confirm_command:
@@ -908,16 +856,6 @@ void frp_runtime_signal_session::handle_flow_failed_phase(const frp_runtime_flow
     std::string error_message;
     if (!owner_ || !owner_->forward_flow_failed(shared_from_this(), request, error_message)) {
         FERR("flow_failed rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
-        release_obj();
-        return;
-    }
-    read_next_command();
-}
-
-void frp_runtime_signal_session::handle_flow_data_phase(const frp_runtime_flow_data_data& request) {
-    std::string error_message;
-    if (!owner_ || !owner_->forward_flow_data(shared_from_this(), request, error_message)) {
-        FERR("flow_data rejected uuid={} flow_id={} err={}", uuid_, request.flow_id, error_message);
         release_obj();
         return;
     }

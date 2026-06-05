@@ -61,9 +61,6 @@ public:
     bool forward_flow_closed(const std::shared_ptr<frp_runtime_signal_session>& session,
                              const frp_runtime_flow_closed_data& data,
                              std::string& error_message);
-    bool forward_flow_data(const std::shared_ptr<frp_runtime_signal_session>& session,
-                           const frp_runtime_flow_data_data& data,
-                           std::string& error_message);
     bool bind_data_session(const std::shared_ptr<frp_runtime_signal_session>& session,
                            const frp_runtime_data_open_data& data,
                            std::string& error_message);
@@ -218,7 +215,6 @@ private:
     void handle_create_flow_phase(const frp_runtime_create_flow_request_data& request);
     void handle_flow_ready_phase(const frp_runtime_flow_ready_data& request);
     void handle_flow_failed_phase(const frp_runtime_flow_failed_data& request);
-    void handle_flow_data_phase(const frp_runtime_flow_data_data& request);
     void handle_flow_closed_phase(const frp_runtime_flow_closed_data& request);
     void send_auth_failure_and_close(const std::string& message);
     void close_socket();

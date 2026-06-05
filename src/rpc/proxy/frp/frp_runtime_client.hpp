@@ -91,58 +91,6 @@ private:
     bool disconnect_notified_ = false;
 };
 
-class frp_runtime_data_client_channel : public std::enable_shared_from_this<frp_runtime_data_client_channel>,
-                                        private asio::noncopyable {
-public:
-    using connect_callback_t = std::function<void()>;
-    using disconnect_callback_t = std::function<void()>;
-    using data_callback_t = std::function<void(std::string)>;
-
-    template <typename... Args>
-    static decltype(auto) make_shared(Args&&... args) {
-        return std::make_shared<frp_runtime_data_client_channel>(std::forward<Args>(args)...);
-    }
-
-    frp_runtime_data_client_channel(const asio::any_io_executor& executor,
-                                    std::string host,
-                                    std::string service,
-                                    std::uint32_t flow_id,
-                                    std::string uuid);
-    ~frp_runtime_data_client_channel() = default;
-
-    void enable_ssl(network_client_ssl_config config);
-    void set_on_connected(connect_callback_t cb);
-    void set_on_disconnected(disconnect_callback_t cb);
-    void set_on_data(data_callback_t cb);
-    void start();
-    void release_obj();
-    void send_bytes(const std::shared_ptr<std::string>& data);
-    std::string local_endpoint_string() const;
-    std::string remote_endpoint_string() const;
-
-private:
-    void read_next_chunk();
-    void do_write();
-    void notify_disconnect_once();
-
-private:
-    network_data_reference reference_;
-    const asio::any_io_executor executor_;
-    const std::string host_;
-    const std::string service_;
-    const std::uint32_t flow_id_;
-    const std::string uuid_;
-    std::shared_ptr<frp_client_upstream> upstream_;
-    std::shared_ptr<proxy_upstream_interface> transport_;
-    network_client_ssl_config ssl_config_;
-    std::array<char, 16 * 1024> read_buf_ {};
-    std::deque<std::shared_ptr<std::string>> write_queue_;
-    connect_callback_t on_connected_;
-    disconnect_callback_t on_disconnected_;
-    data_callback_t on_data_;
-    bool disconnect_notified_ = false;
-};
-
 class frp_runtime_unified_client_agent
     : public std::enable_shared_from_this<frp_runtime_unified_client_agent>,
       private asio::noncopyable {

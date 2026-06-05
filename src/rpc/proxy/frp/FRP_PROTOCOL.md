@@ -472,10 +472,7 @@ P2P 收包分为两个阶段，不同组件处理：
 | 16 | `punch_confirm_ok` | C→S→C | |
 | 17 | `flow_ready` | C→S→C | 流就绪（端到端链路通） |
 | 18 | `flow_failed` | C→S→C | 流失败 (flow_id, reason, message) |
-| 19 | `flow_data` | C→S→C | 信号通道数据转发 (保留，当前忽略) |
 | 20 | `flow_closed` | C→S→C | 流关闭 (flow_id) |
-| 21 | `ping_request` | C→S | 心跳 |
-| 22 | `ping_response` | S→C | 心跳回应 |
 | 31 | `register_services` | C→S | 批量注册服务 (uuid, nat_type, rtt, groups) |
 | 32 | `register_services_resp` | S→C | 注册结果 |
 | 33 | `subscribe_services` | C→S | 批量订阅服务目录 (register_keys[]) |

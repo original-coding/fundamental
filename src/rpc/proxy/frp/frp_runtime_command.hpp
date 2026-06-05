@@ -30,10 +30,7 @@ enum frp_runtime_command_type : std::uint8_t
     frp_runtime_punch_confirm_ok_command,
     frp_runtime_flow_ready_command,
     frp_runtime_flow_failed_command,
-    frp_runtime_flow_data_command,
     frp_runtime_flow_closed_command,
-    frp_runtime_ping_request_command,
-    frp_runtime_ping_response_command,
     // Unified client commands (multi-key support)
     frp_runtime_register_services_command,
     frp_runtime_register_services_resp_command,
@@ -217,21 +214,11 @@ struct frp_runtime_flow_failed_data : frp_runtime_command_base {
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
-struct frp_runtime_flow_data_data : frp_runtime_command_base {
-    std::uint32_t flow_id = 0;
-    std::string payload_base64;
-    RTTR_ENABLE(frp_runtime_command_base)
-};
-
 struct frp_runtime_flow_closed_data : frp_runtime_command_base {
     std::uint32_t flow_id = 0;
     RTTR_ENABLE(frp_runtime_command_base)
 };
 
-
-struct frp_runtime_ping_response_data : frp_runtime_command_base {
-    RTTR_ENABLE(frp_runtime_command_base)
-};
 
 struct frp_runtime_time_sync_request_data : frp_runtime_command_base {
     std::uint32_t seq = 0;             // sequence number
@@ -442,17 +429,9 @@ inline void __register_frp_runtime_reflect_type__() {
         .property("reason", &frp_runtime_flow_failed_data::reason)
         .property("message", &frp_runtime_flow_failed_data::message);
 
-    rttr::registration::class_<frp_runtime_flow_data_data>("network::proxy::frp_runtime_flow_data_data")
-        .constructor()(rttr::policy::ctor::as_object)
-        .property("flow_id", &frp_runtime_flow_data_data::flow_id)
-        .property("payload_base64", &frp_runtime_flow_data_data::payload_base64);
-
     rttr::registration::class_<frp_runtime_flow_closed_data>("network::proxy::frp_runtime_flow_closed_data")
         .constructor()(rttr::policy::ctor::as_object)
         .property("flow_id", &frp_runtime_flow_closed_data::flow_id);
-
-    rttr::registration::class_<frp_runtime_ping_response_data>("network::proxy::frp_runtime_ping_response_data")
-        .constructor()(rttr::policy::ctor::as_object);
 
     rttr::registration::class_<frp_runtime_time_sync_request_data>(
         "network::proxy::frp_runtime_time_sync_request_data")
