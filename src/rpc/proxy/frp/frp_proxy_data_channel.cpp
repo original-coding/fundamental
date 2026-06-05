@@ -261,7 +261,7 @@ void frp_proxy_data_channel::relay_do_write() {
         { network_write_buffer_t { current->data(), current->size() } },
         [this, self = shared_from_this()](std::error_code ec, std::size_t) {
             if (!reference_.is_valid()) return;
-            if (ec || !relay_transport_) { release_obj(); return; }
+            if (ec || !relay_transport_) { if (p2p_success_) return; release_obj(); return; }
             relay_write_queue_.pop_front();
             if (!relay_write_queue_.empty()) relay_do_write();
         });
