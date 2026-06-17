@@ -70,9 +70,10 @@ void websocket_forward_connection::start_ws_proxy() {
 
     auto response_data    = std::make_shared<std::string>();
     bool finished_success = false;
+    std::string debug_msg;
     Fundamental::ScopeGuard response_guard([&]() {
+        FINFO("{} \n{}", debug_msg, *response_data);
         if (!finished_success) {
-            FDEBUG("ws forward:response \n{}", *response_data);
             //
             forward_async_write_buffers({ network_write_buffer_t { response_data->data(), response_data->size() } },
                                         [this, self = shared_from_this(), response_data,
@@ -164,8 +165,8 @@ void websocket_forward_connection::start_ws_proxy() {
                 host_type = network::proxy::proxy_host_type::raw_tcp_proxy;
             }
         }
-        FINFO("ws_forward {} to {} {} type:{} depth:{}", parse_context.head2, proxy_host, proxy_service, host_type,
-              forward_depth);
+        debug_msg = Fundamental::StringFormat("ws_forward {} to {} {} type:{} depth:{}", parse_context.head2,
+                                              proxy_host, proxy_service, host_type, forward_depth);
         response_context.head1 = response_context.kHttpVersion;
         response_context.head2 = response_context.kWebsocketSuccessCode;
         response_context.head3 = response_context.kWebsocketSuccessStr;
