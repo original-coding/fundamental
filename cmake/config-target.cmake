@@ -197,12 +197,12 @@ endif()
 
 target_compile_options(BuildSettings INTERFACE
     # LTO 编译选项（-flto 或 /GL）
-    $<$<NOT:$<CONFIG:Debug>>:
+    $<$<CONFIG:Release>:
     $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-flto=auto>
     $<$<CXX_COMPILER_ID:MSVC>:/GL>
     >
     # GCC/Clang 分节选项（为 --gc-sections 做准备）
-    $<$<NOT:$<CONFIG:Debug>>:
+    $<$<CONFIG:Release>:
     $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:
     -ffunction-sections
     -fdata-sections
@@ -218,17 +218,17 @@ target_compile_options(BuildSettings INTERFACE
 
 target_link_options(BuildSettings INTERFACE
     # LTO 链接选项（-flto 或 /LTCG）
-    $<$<NOT:$<CONFIG:Debug>>:
+    $<$<CONFIG:Release>:
     $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-flto=auto>
     $<$<CXX_COMPILER_ID:MSVC>:/LTCG>
     >
     # 无用代码剥离（--gc-sections 或 /OPT:REF）
-    $<$<NOT:$<CONFIG:Debug>>:
+    $<$<CONFIG:Release>:
     $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-Wl,--gc-sections>
     $<$<CXX_COMPILER_ID:MSVC>:/OPT:REF>
     >
     # 可选：MSVC 的代码段合并（类似 ICF）
-    $<$<NOT:$<CONFIG:Debug>>:
+    $<$<CONFIG:Release>:
     $<$<CXX_COMPILER_ID:MSVC>:/OPT:ICF>
     >
 
