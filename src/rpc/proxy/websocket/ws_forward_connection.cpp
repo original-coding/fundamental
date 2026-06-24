@@ -88,7 +88,7 @@ void websocket_forward_connection::start_ws_proxy() {
         }
     });
 
-    const char* error_reason = nullptr;
+    std::string error_reason;
     do {
         // check head
         if (parse_context.head1 != response_context.kWebsocketMethod ||
@@ -154,7 +154,7 @@ void websocket_forward_connection::start_ws_proxy() {
             }
         }
         if (proxy_host.empty() || proxy_service.empty()) {
-            error_reason = "no route available for the requested URI";
+            error_reason = Fundamental::StringFormat("no route available for the requested URI:{}", request_uri);
             goto HAS_ANY_PROTOCAL_ERROR;
         }
 
@@ -180,7 +180,7 @@ void websocket_forward_connection::start_ws_proxy() {
 
     } while (0);
 HAS_ANY_PROTOCAL_ERROR:
-    *response_data = response_context.default_error_response(error_reason ? error_reason : "");
+    *response_data = response_context.default_error_response(error_reason);
 }
 
 void websocket_forward_connection::start_ws_proxy_to_next_layer() {
