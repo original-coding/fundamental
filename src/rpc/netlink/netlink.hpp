@@ -58,7 +58,8 @@ public:
     const netlink_config& get_config() const;
     // init interface,throw when failed
     Fundamental::error_code online_setup(const PeerNetworkInfo& coordinate_server,
-                                         LinkNumberType coordinate_server_player_no);
+                                         LinkNumberType coordinate_server_player_no,
+                                         std::size_t setup_timeout_sec = 30);
     void local_setup();
 
     // abort all link wait operations,those operations will return error

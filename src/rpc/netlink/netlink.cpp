@@ -120,15 +120,19 @@ const netlink_config& netlink::get_config() const {
 }
 
 Fundamental::error_code netlink::online_setup(const PeerNetworkInfo& coordinate_server,
-                                              LinkNumberType coordinate_server_player_no) {
+                                              LinkNumberType coordinate_server_player_no,
+                                              std::size_t setup_timeout_sec) {
     pdata->init();
     const static std::string kSetupKey          = "__online_setup__";
     const static std::string kSetupBroadCastKey = "__online_setup_broadcast__";
     Fundamental::error_code ec;
     do {
         if (pdata->is_setup) break;
-
-        if (ec) break;
+        auto backup_link_timeout_sec = pdata->config.link_timeout_sec;
+        if (setup_timeout_sec == 0) setup_timeout_sec = backup_link_timeout_sec;
+        if (setup_timeout_sec > backup_link_timeout_sec) setup_timeout_sec = backup_link_timeout_sec;
+        pdata->config.link_timeout_sec = setup_timeout_sec;
+        Fundamental::ScopeGuard recover_g([&]() { pdata->config.link_timeout_sec = backup_link_timeout_sec; });
         if (coordinate_server_player_no >= pdata->config.player_nums ||
             pdata->config.local_player_no >= pdata->config.player_nums) {
             ec = make_error_code(
