@@ -287,7 +287,8 @@ void protocal_pipe_connection::process_pipe_handshake() {
 
 void protocal_pipe_connection::process_ws_proxy() {
     // send ws request first
-    FINFO("protpcal pipe client request ws_forward {}", request_context.route_path);
+    FINFO("protpcal pipe client request ws_forward {} to {}:{}", request_context.route_path, request_context.dst_host,
+          request_context.dst_service);
     auto ws_upgrade     = proxy::ws_upgrade_imp::make_shared(request_context.route_path, request_context.dst_host);
     auto write_callback = [this,
                            ptr = shared_from_this()](write_buffer_t write_buffers,

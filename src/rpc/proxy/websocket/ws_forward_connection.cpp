@@ -72,7 +72,12 @@ void websocket_forward_connection::start_ws_proxy() {
     bool finished_success = false;
     std::string debug_msg;
     Fundamental::ScopeGuard response_guard([&]() {
-        FINFO("{} \n{}", debug_msg, *response_data);
+        if (!debug_msg.empty()) {
+            FINFO("{}", debug_msg);
+        } else {
+            FINFO("ws proxy failed:{}", *response_data);
+        }
+
         if (!finished_success) {
             //
             forward_async_write_buffers({ network_write_buffer_t { response_data->data(), response_data->size() } },
