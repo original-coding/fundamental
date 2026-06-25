@@ -1,7 +1,9 @@
 #include "netlink.hpp"
 #include "fundamental/basic/log.h"
+#include "fundamental/delay_queue/delay_queue.h"
 #include "fundamental/rttr_handler/deserializer.h"
 #include "fundamental/rttr_handler/serializer.h"
+
 #include <unordered_map>
 
 namespace network
@@ -336,8 +338,11 @@ Fundamental::error_code netlink::send_data(std::string data,
             pdata->ref_interface.flush_data(command_data, pdata->config.all_players[no],
                                             pdata->config.network_timeout_sec * 1000, new_context->result_cb);
         }
+        auto time_start_msec = Fundamental::Timer::GetTimeNow();
+        auto timeout_msec    = static_cast<decltype(time_start_msec)>(pdata->config.link_timeout_sec * 1000);
         // wait all data sent
         while (!contexts.empty()) {
+
             for (auto iter = contexts.begin(); iter != contexts.end();) {
                 try {
                     // failed retry case
@@ -400,6 +405,18 @@ Fundamental::error_code netlink::send_data(std::string data,
                 }
             }
             if (contexts.empty() || ec) break;
+
+            if (timeout_msec > 0) {
+                auto time_now_msec = Fundamental::Timer::GetTimeNow();
+                auto time_diff     = time_now_msec - time_start_msec;
+                if (time_diff > timeout_msec) {
+                    ec =
+                        make_error_code(netlink_errors::netlink_timeout,
+                                        Fundamental::StringFormat("timeout [{}>{} msec]  when send link data[{}] by {}",
+                                                                  time_diff, timeout_msec, key, call_tag));
+                    break;
+                }
+            }
             std::unique_lock<std::mutex> locker(pdata->send_status_mutex);
             // loop to check timeout and send status changed
             // break when timeout with resend demand
