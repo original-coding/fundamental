@@ -21,7 +21,7 @@ struct RttrMetaControlOption {
     RttrControlMetaDataType excludeDatas;
     RttrControlMetaDataType includeDatas;
     bool enable_env_replace = false;
-    bool env_replace_enabled = false;
+    bool apply_env_replace = false;
     rttr::variant env_default_value;
     static std::string ExcludeMetaDataKey();
     static std::string IncludeMetaDataKey();

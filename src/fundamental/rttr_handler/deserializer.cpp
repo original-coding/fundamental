@@ -105,7 +105,7 @@ void fromjson_recursively(const json& json_object,
 
             bool handled = false;
 
-            if (json_object.is_string() && option.env_replace_enabled) {
+            if (json_object.is_string() && option.apply_env_replace) {
                 bool has_env_var = false;
                 bool has_null_env = false;
                 auto replaced = replace_env_vars(json_object.get<std::string>(), has_env_var, has_null_env);
@@ -142,10 +142,10 @@ void fromjson_recursively(const json& json_object,
 
             auto child_option = option;
             if (option.enable_env_replace) {
-                child_option.env_replace_enabled = false;
+                child_option.apply_env_replace = false;
                 auto env_replace_meta = prop.get_metadata(RttrMetaControlOption::EnvReplaceMetaDataKey());
                 if (env_replace_meta.is_valid()) {
-                    child_option.env_replace_enabled = true;
+                    child_option.apply_env_replace = true;
                     auto env_default_meta = prop.get_metadata(RttrMetaControlOption::EnvDefaultMetaDataKey());
                     if (env_default_meta.is_valid()) {
                         child_option.env_default_value = env_default_meta;
