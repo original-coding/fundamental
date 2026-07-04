@@ -9,6 +9,7 @@
 #include "fundamental/rttr_handler/deserializer.h"
 #include "fundamental/rttr_handler/serializer.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <list>
 #include <map>
@@ -232,6 +233,16 @@ struct TestExtraObject {
     }
 };
 
+struct TestEnvReplaceObject {
+    TestEnvReplaceObject() = default;
+    std::string path;
+    int port = 0;
+    std::string normal_str;
+    bool operator==(const TestEnvReplaceObject& other) const noexcept {
+        return path == other.path && port == other.port && normal_str == other.normal_str;
+    }
+};
+
 RTTR_REGISTRATION {
     rttr::registration::class_<point2d>("point2d")
         .constructor()(rttr::policy::ctor::as_object)
@@ -338,11 +349,27 @@ RTTR_REGISTRATION {
             .property("mm", &register_type::mm)
             .property("sss", &register_type::sss);
     }
+    {
+        using register_type = TestEnvReplaceObject;
+        rttr::registration::class_<register_type>("TestEnvReplaceObject")
+            .constructor()(rttr::policy::ctor::as_object)
+            .property("path", &register_type::path)(
+                metadata(Fundamental::RttrMetaControlOption::EnvReplaceMetaDataKey(), true),
+                metadata(Fundamental::RttrMetaControlOption::EnvDefaultMetaDataKey(), std::string("/tmp/default"))
+            )
+            .property("port", &register_type::port)(
+                metadata(Fundamental::RttrMetaControlOption::EnvReplaceMetaDataKey(), true),
+                metadata(Fundamental::RttrMetaControlOption::EnvDefaultMetaDataKey(), 8080)
+            )
+            .property("normal_str", &register_type::normal_str);
+    }
 }
 
 void test_normal_packer();
+void test_env_replace();
 int main(int argc, char* argv[]) {
     test_normal_packer();
+    test_env_replace();
     using namespace Fundamental::io;
     auto type = rttr::type::get<std::set<TestContainerEle>>();
 
@@ -729,6 +756,106 @@ int main(int argc, char* argv[]) {
     }
 
     return 0;
+}
+
+void test_env_replace() {
+    using namespace Fundamental::io;
+
+    Fundamental::RttrDeserializeOption option;
+    option.enable_env_replace = true;
+
+    // Test 0: master switch OFF -> no replacement even with __env_replace__ metadata
+    {
+        setenv("TEST_PATH", "/home/user/data", 1);
+        std::string json = R"({"path": "${TEST_PATH}", "port": 0, "normal_str": "hello"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj));  // default option, enable_env_replace = false
+        FASSERT(obj.path == "${TEST_PATH}");  // NOT replaced
+        unsetenv("TEST_PATH");
+    }
+
+    // Test 1: string with ${VAR}, env var exists
+    {
+        setenv("TEST_PATH", "/home/user/data", 1);
+        std::string json = R"({"path": "${TEST_PATH}", "port": 0, "normal_str": "hello"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj, option));
+        FASSERT(obj.path == "/home/user/data");
+        FASSERT(obj.normal_str == "hello");
+        unsetenv("TEST_PATH");
+    }
+
+    // Test 2: string with ${VAR}, env var not set -> use default
+    {
+        unsetenv("TEST_PATH");
+        std::string json = R"({"path": "${TEST_PATH}", "port": 0, "normal_str": "hello"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj, option));
+        FASSERT(obj.path == "/tmp/default");
+    }
+
+    // Test 3: int with ${VAR}, env var exists and converts
+    {
+        setenv("TEST_PORT", "9090", 1);
+        std::string json = R"({"path": "/tmp", "port": "${TEST_PORT}", "normal_str": "hello"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj, option));
+        FASSERT(obj.port == 9090);
+        unsetenv("TEST_PORT");
+    }
+
+    // Test 4: int with ${VAR}, env var not set -> use default
+    {
+        unsetenv("TEST_PORT");
+        std::string json = R"({"path": "/tmp", "port": "${TEST_PORT}", "normal_str": "hello"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj, option));
+        FASSERT(obj.port == 8080);
+    }
+
+    // Test 5: int with ${VAR}, env var non-numeric -> use default
+    {
+        setenv("TEST_PORT", "not_a_number", 1);
+        std::string json = R"({"path": "/tmp", "port": "${TEST_PORT}", "normal_str": "hello"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj, option));
+        FASSERT(obj.port == 8080);
+        unsetenv("TEST_PORT");
+    }
+
+    // Test 6: property without __env_replace__ -> no replacement
+    {
+        setenv("TEST_PATH", "/should/not/replace", 1);
+        std::string json = R"({"path": "/tmp", "port": 0, "normal_str": "${TEST_PATH}"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj, option));
+        FASSERT(obj.normal_str == "${TEST_PATH}");
+        unsetenv("TEST_PATH");
+    }
+
+    // Test 7: $VAR format (without braces)
+    {
+        setenv("TEST_PATH", "/home/user/data", 1);
+        std::string json = R"({"path": "$TEST_PATH", "port": 0, "normal_str": "hello"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj, option));
+        FASSERT(obj.path == "/home/user/data");
+        unsetenv("TEST_PATH");
+    }
+
+    // Test 8: mixed text with inline ${VAR}
+    {
+        setenv("TEST_HOST", "localhost", 1);
+        setenv("TEST_PORT2", "8080", 1);
+        std::string json = R"({"path": "${TEST_HOST}:${TEST_PORT2}", "port": 0, "normal_str": "hello"})";
+        TestEnvReplaceObject obj;
+        FASSERT(from_json(json, obj, option));
+        FASSERT(obj.path == "localhost:8080");
+        unsetenv("TEST_HOST");
+        unsetenv("TEST_PORT2");
+    }
+
+    FINFO("test_env_replace all passed");
 }
 
 void test_normal_packer() {

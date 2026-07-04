@@ -17,6 +17,16 @@ std::string RttrMetaControlOption::CommentMetaDataKey() {
     return kCommentMetaDataKey;
 }
 
+std::string RttrMetaControlOption::EnvReplaceMetaDataKey() {
+    static constexpr const char* kEnvReplaceMetaDataKey = "__env_replace__";
+    return kEnvReplaceMetaDataKey;
+}
+
+std::string RttrMetaControlOption::EnvDefaultMetaDataKey() {
+    static constexpr const char* kEnvDefaultMetaDataKey = "__env_default__";
+    return kEnvDefaultMetaDataKey;
+}
+
 bool RttrMetaControlOption::HasInterSection(const RttrControlMetaDataType& data1,
                                             const RttrControlMetaDataType& data2) {
     std::vector<RttrControlMetaDataType::value_type> out;

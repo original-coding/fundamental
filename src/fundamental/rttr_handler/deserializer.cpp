@@ -1,6 +1,7 @@
 #include "deserializer.h"
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #ifdef _MSC_VER
     #pragma warning(push)
@@ -36,6 +37,43 @@ void write_map(const Fundamental::json& json_array_value,
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
+std::string replace_env_vars(const std::string& input, bool& has_env_var, bool& has_null_env) {
+    has_env_var = false;
+    has_null_env = false;
+    std::string result;
+    result.reserve(input.size());
+    for (size_t i = 0; i < input.size();) {
+        if (input[i] == '$' && i + 1 < input.size()) {
+            if (input[i + 1] == '{') {
+                size_t end = input.find('}', i + 2);
+                if (end != std::string::npos) {
+                    has_env_var = true;
+                    std::string var_name = input.substr(i + 2, end - i - 2);
+                    const char* env_val = std::getenv(var_name.c_str());
+                    if (env_val) result += env_val;
+                    else has_null_env = true;
+                    i = end + 1;
+                    continue;
+                }
+            } else if (std::isalpha(static_cast<unsigned char>(input[i + 1])) || input[i + 1] == '_') {
+                has_env_var = true;
+                size_t j = i + 1;
+                while (j < input.size() && (std::isalnum(static_cast<unsigned char>(input[j])) || input[j] == '_'))
+                    ++j;
+                std::string var_name = input.substr(i + 1, j - i - 1);
+                const char* env_val = std::getenv(var_name.c_str());
+                if (env_val) result += env_val;
+                else has_null_env = true;
+                i = j;
+                continue;
+            }
+        }
+        result += input[i];
+        ++i;
+    }
+    return result;
+}
+
 void fromjson_recursively(const json& json_object,
                           rttr::variant& var,
                           rttr::instance obj2,
@@ -61,14 +99,33 @@ void fromjson_recursively(const json& json_object,
                 write_map(json_object, var, option);
             }
         } else { // basic type
-            variant extracted_value = extract_basic_types(json_object);
-            auto target_type        = var.get_type();
+            auto target_type = var.get_type();
             if (target_type.is_wrapper()) target_type = target_type.get_wrapped_type();
             const auto& ref_type = target_type;
-            if (extracted_value.convert(ref_type)) // REMARK: CONVERSION WORKS ONLY WITH "const type", check
-                                                   // whether this is correct or not!
-                var = extracted_value;
-            else { // maybe unsupported
+
+            bool handled = false;
+
+            if (json_object.is_string() && option.env_replace_enabled) {
+                bool has_env_var = false;
+                bool has_null_env = false;
+                auto replaced = replace_env_vars(json_object.get<std::string>(), has_env_var, has_null_env);
+                if (has_env_var) {
+                    variant extracted_value = replaced;
+                    if (has_null_env || !extracted_value.convert(ref_type)) {
+                        if (option.env_default_value.is_valid()) {
+                            extracted_value = option.env_default_value;
+                            extracted_value.convert(ref_type);
+                        }
+                    }
+                    var = extracted_value;
+                    handled = true;
+                }
+            }
+
+            if (!handled) {
+                variant extracted_value = extract_basic_types(json_object);
+                if (extracted_value.convert(ref_type))
+                    var = extracted_value;
             }
         }
 
@@ -82,8 +139,22 @@ void fromjson_recursively(const json& json_object,
                 continue;
             }
             const Fundamental::json& json_value = iter.value();
-            variant var_tmp                         = prop.get_value(obj);
-            fromjson_recursively(json_value, var_tmp, var_tmp, option);
+
+            auto child_option = option;
+            if (option.enable_env_replace) {
+                child_option.env_replace_enabled = false;
+                auto env_replace_meta = prop.get_metadata(RttrMetaControlOption::EnvReplaceMetaDataKey());
+                if (env_replace_meta.is_valid()) {
+                    child_option.env_replace_enabled = true;
+                    auto env_default_meta = prop.get_metadata(RttrMetaControlOption::EnvDefaultMetaDataKey());
+                    if (env_default_meta.is_valid()) {
+                        child_option.env_default_value = env_default_meta;
+                    }
+                }
+            }
+
+            variant var_tmp = prop.get_value(obj);
+            fromjson_recursively(json_value, var_tmp, var_tmp, child_option);
             if (var_tmp.is_valid()) prop.set_value(obj, var_tmp);
         }
     }

@@ -20,9 +20,14 @@ using RttrControlMetaDataType = std::set<std::string>;
 struct RttrMetaControlOption {
     RttrControlMetaDataType excludeDatas;
     RttrControlMetaDataType includeDatas;
+    bool enable_env_replace = false;
+    bool env_replace_enabled = false;
+    rttr::variant env_default_value;
     static std::string ExcludeMetaDataKey();
     static std::string IncludeMetaDataKey();
     static std::string CommentMetaDataKey();
+    static std::string EnvReplaceMetaDataKey();
+    static std::string EnvDefaultMetaDataKey();
     static bool HasInterSection(const RttrControlMetaDataType& data1, const RttrControlMetaDataType& data2);
     bool ValidateSerialize(const rttr::property& prop) const;
 };
