@@ -70,3 +70,10 @@ if(FUNDAMENTAL_ENABLE_INSTALL)
         FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "*.ipp" PATTERN "*.hh"
     )
 endif()
+
+# kcp keepalive (IKCP_CMD_PING) standalone test: compiles ikcp.c directly,
+# independent of the network library.
+if(IMPORT_GTEST)
+    add_unit_test_executable(kcp_ping_test
+        "rudp/kcp_imp/ikcp.c;rudp/kcp_imp/kcp_ping_test.cpp" "" "")
+endif()

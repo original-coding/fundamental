@@ -302,6 +302,11 @@ struct IKCPCB {
     void (*notify_read)(int len, void* user);
     // called when a seg has been removed from send buf
     void (*notify_write)(int len, void* user);
+    // keepalive liveness detection (IKCP_CMD_PING probes)
+    IUINT32 probe_interval;   // fixed probe interval (ms); 0 = disabled
+    IUINT32 probe_max_count;  // max unanswered probes before judged dead
+    IUINT32 probe_count;      // consecutive probes sent without any input
+    IUINT32 ts_lastinput;     // last inbound packet / probe send time
     void (*writelog)(const char* log, struct IKCPCB* kcp, void* user);
 };
 
@@ -340,6 +345,14 @@ extern "C"
     // set output callback, which will be invoked by kcp
     void ikcp_setoutput(ikcpcb* kcp, int (*output)(const char* buf, int len, ikcpcb* kcp, void* user));
 
+    // keepalive liveness detection: when no packet arrives from the peer,
+    // send periodic IKCP_CMD_WINS probes (window announcement, no side
+    // effects on the peer); if max_count probes go unanswered, the link is
+    // judged dead (state = (IUINT32)-1, same semantics as dead_link) and both
+    // ikcp_update() and ikcp_input() start returning non-zero.
+    // interval_ms == 0 disables the feature (default).
+    void ikcp_enable_keepalive(ikcpcb* kcp, IUINT32 interval_ms, IUINT32 max_count);
+
     // user/upper level recv: returns size, returns below zero for EAGAIN
     int ikcp_recv(ikcpcb* kcp, char* buffer, int len);
 
@@ -349,7 +362,7 @@ extern "C"
     // update state (call it repeatedly, every 10ms-100ms), or you can ask
     // ikcp_check when to call it again (without ikcp_input/_send calling).
     // 'current' - current timestamp in millisec.
-    void ikcp_update(ikcpcb* kcp, IUINT32 current);
+    int ikcp_update(ikcpcb* kcp, IUINT32 current); // returns non-zero once the link is judged dead
 
     // Determine when should you invoke ikcp_update:
     // returns when you should invoke ikcp_update in millisec, if there
