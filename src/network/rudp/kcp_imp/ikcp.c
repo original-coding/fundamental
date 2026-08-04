@@ -276,7 +276,12 @@ ikcpcb* ikcp_create(IUINT32 conv, void* user) {
     kcp->output       = NULL;
     kcp->notify_read  = NULL;
     kcp->notify_write = NULL;
-    kcp->writelog     = NULL;
+    // keepalive liveness detection: disabled by default
+    kcp->probe_interval  = 0;
+    kcp->probe_max_count = 0;
+    kcp->probe_count     = 0;
+    kcp->ts_lastinput    = 0;
+    kcp->writelog        = NULL;
 
     return kcp;
 }
@@ -723,6 +728,7 @@ void ikcp_parse_data(ikcpcb* kcp, IKCPSEG* newseg) {
 // input data
 //---------------------------------------------------------------------
 int ikcp_input(ikcpcb* kcp, const char* data, long size) {
+    if (kcp->state == (IUINT32)-1) return -4; // link judged dead by keepalive
     IUINT32 prev_una = kcp->snd_una;
     IUINT32 maxack = 0, latest_ts = 0;
     int flag = 0;
@@ -859,6 +865,15 @@ int ikcp_input(ikcpcb* kcp, const char* data, long size) {
                 kcp->incr = kcp->rmt_wnd * mss;
             }
         }
+    }
+
+    // keepalive (pure addition): liveness is refreshed once after the whole
+    // batch has been processed successfully - a legitimate inbound packet
+    // means the peer is alive. Invalid/unknown frames exit earlier via the
+    // error returns and do not refresh liveness.
+    if (kcp->probe_interval != 0) {
+        kcp->ts_lastinput = kcp->current;
+        kcp->probe_count  = 0;
     }
 
     return 0;
@@ -1101,7 +1116,8 @@ void ikcp_flush(ikcpcb* kcp) {
 // ikcp_check when to call it again (without ikcp_input/_send calling).
 // 'current' - current timestamp in millisec.
 //---------------------------------------------------------------------
-void ikcp_update(ikcpcb* kcp, IUINT32 current) {
+int ikcp_update(ikcpcb* kcp, IUINT32 current) {
+    if (kcp->state == (IUINT32)-1) return -1; // link judged dead by keepalive
     IINT32 slap;
 
     kcp->current = current;
@@ -1109,6 +1125,28 @@ void ikcp_update(ikcpcb* kcp, IUINT32 current) {
     if (kcp->updated == 0) {
         kcp->updated  = 1;
         kcp->ts_flush = kcp->current;
+    }
+
+    // keepalive liveness detection: when no packet has arrived for one
+    // interval, reuse the existing IKCP_CMD_WINS path (ASK_TELL -> flush)
+    // as the liveness probe - the peer only updates rmt_wnd and refreshes
+    // liveness, no side effects. Unanswered probes beyond max_count judge
+    // the link dead (state = -1, same semantics as dead_link) and the
+    // return value becomes non-zero (see ikcp_update/ikcp_input).
+    if (kcp->probe_interval != 0) {
+        if (_itimediff(kcp->current, kcp->ts_lastinput) >= (int)kcp->probe_interval) {
+            if (kcp->probe_count + 1 > kcp->probe_max_count) {
+                // max unanswered probes reached: judge dead without sending
+                // another probe; surface via the return value from now on
+                kcp->state = (IUINT32)-1;
+                kcp->probe_interval = 0;
+                return -1;
+            } else {
+                kcp->probe |= IKCP_ASK_TELL;  // reuse the existing WINS send path
+                kcp->ts_lastinput = kcp->current; // reset the base: next probe due one interval later
+                kcp->probe_count++;
+            }
+        }
     }
 
     slap = _itimediff(kcp->current, kcp->ts_flush);
@@ -1132,6 +1170,8 @@ void ikcp_update(ikcpcb* kcp, IUINT32 current) {
 
         ikcp_flush(kcp);
     }
+
+    return 0;
 }
 
 //---------------------------------------------------------------------
@@ -1173,6 +1213,14 @@ IUINT32 ikcp_check(const ikcpcb* kcp, IUINT32 current) {
         if (diff < tm_packet) tm_packet = diff;
     }
 
+    // keepalive probe timing: next probe is always ts_lastinput + interval
+    if (kcp->probe_interval != 0) {
+        IUINT32 next_probe = kcp->ts_lastinput + kcp->probe_interval;
+        IINT32 diff = _itimediff(next_probe, current);
+        if (diff <= 0) return current;
+        if (diff < tm_packet) tm_packet = diff;
+    }
+
     minimal = (IUINT32)(tm_packet < tm_flush ? tm_packet : tm_flush);
     if (minimal >= kcp->interval) minimal = kcp->interval;
     return current + minimal;
@@ -1188,6 +1236,19 @@ int ikcp_setmtu(ikcpcb* kcp, int mtu) {
     ikcp_free(kcp->buffer);
     kcp->buffer = buffer;
     return 0;
+}
+
+//---------------------------------------------------------------------
+// keepalive liveness detection
+//---------------------------------------------------------------------
+void ikcp_enable_keepalive(ikcpcb* kcp, IUINT32 interval_ms, IUINT32 max_count) {
+    if (kcp == NULL) return;
+    kcp->probe_interval  = interval_ms;
+    kcp->probe_max_count = max_count;
+    kcp->probe_count     = 0;
+    // ts_lastinput is kept: if the connection already exchanged packets it
+    // stays valid; if never (0) the first probe is due one interval after
+    // the first update, matching "no inbound traffic -> probe"
 }
 
 int ikcp_interval(ikcpcb* kcp, int interval) {
