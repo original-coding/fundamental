@@ -147,8 +147,8 @@ if grep -q "\[TEST PASSED\]" "${WORK_DIR}/echo_client.log"; then
 
     # Check log evidence for p2p upgrade
     P2P_OK=false
-    if grep -q "switched to p2p" "${WORK_DIR}/provider.log" 2>/dev/null || \
-       grep -q "switched to p2p" "${WORK_DIR}/accessor.log" 2>/dev/null; then
+    if grep -qE "p2p punch complete|p2p active|p2p success" "${WORK_DIR}/provider.log" 2>/dev/null || \
+       grep -qE "p2p punch complete|p2p active|p2p success" "${WORK_DIR}/accessor.log" 2>/dev/null; then
         P2P_OK=true
     fi
     if [[ "${P2P_OK}" == "true" ]]; then
@@ -158,7 +158,7 @@ if grep -q "\[TEST PASSED\]" "${WORK_DIR}/echo_client.log"; then
     fi
     echo ""
     echo "=== P2P evidence ==="
-    grep "switched to p2p" "${WORK_DIR}/provider.log" "${WORK_DIR}/accessor.log" || echo "   (none)"
+    grep -E "p2p punch complete|p2p active|p2p success" "${WORK_DIR}/provider.log" "${WORK_DIR}/accessor.log" || echo "   (none)"
     echo ""
     echo "=== tail logs ==="
     echo "--- server.log (last 8 lines) ---"

@@ -26,7 +26,8 @@ public:
     }
     static std::unordered_map<std::string, MethodFilter> s_method_str_2_filter;
     static MethodFilter from_method_string(const std::string& httpMethod);
-    const http_route_table& get_table(const std::string& pattern);
+    /// 返回副本：锁内引用在锁外使用会悬垂（route 表可被注册/热更新修改）
+    http_route_table get_table(const std::string& pattern);
     void update_route_table(const std::string& pattern, const http_handler& handler, std::uint32_t method_mask);
     void remove_route_table(const std::string& pattern);
     void set_default_route_table(http_route_table table);

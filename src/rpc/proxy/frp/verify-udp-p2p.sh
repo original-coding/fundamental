@@ -141,7 +141,7 @@ sleep 4
 echo ""
 echo "[test] running UDP echo client against accessor ${ACCESSOR_PORT} ..."
 "${ECHO_BIN}" --mode udp-client --host 127.0.0.1 --port "${ACCESSOR_PORT}" \
-        --count 10 --delay 200 >"${WORK_DIR}/echo_client.log" 2>&1
+        --count 30 --delay 200 >"${WORK_DIR}/echo_client.log" 2>&1
 
 PASSED=false
 P2P_OK=false
@@ -150,8 +150,8 @@ if grep -q '\[TEST PASSED\]' "${WORK_DIR}/echo_client.log"; then
     PASSED=true
 fi
 
-if grep -q "switched to p2p" "${WORK_DIR}/provider.log" 2>/dev/null || \
-   grep -q "switched to p2p" "${WORK_DIR}/accessor.log" 2>/dev/null; then
+if grep -qE "p2p punch complete|p2p active|p2p success" "${WORK_DIR}/provider.log" 2>/dev/null || \
+   grep -qE "p2p punch complete|p2p active|p2p success" "${WORK_DIR}/accessor.log" 2>/dev/null; then
     P2P_OK=true
 fi
 
@@ -162,7 +162,7 @@ if [[ "${PASSED}" == "true" ]] && [[ "${P2P_OK}" == "true" ]]; then
     echo "   p2p upgrade          : confirmed"
     echo ""
     echo "=== P2P evidence ==="
-    grep "switched to p2p" "${WORK_DIR}/provider.log" "${WORK_DIR}/accessor.log"
+    grep -E "p2p punch complete|p2p active|p2p success" "${WORK_DIR}/provider.log" "${WORK_DIR}/accessor.log"
     echo ""
     echo "=== tail logs ==="
     echo "--- server.log (last 4 lines) ---"

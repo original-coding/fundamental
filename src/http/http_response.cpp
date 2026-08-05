@@ -149,7 +149,7 @@ http_response::http_response(http_connection& http_con_ref) : http_con_ref(http_
 void http_response::write_headeres() {
     response_pack_status |= http_response_status_mask::http_response_headeres_packed;
     std::vector<network_write_buffer_t> buffers;
-    buffers.push_back(asio::buffer(StatusStrings::status_to_buffer(status_)));
+    buffers.push_back(asio::buffer(StatusStrings::status_to_buffer(status_.load())));
     for (std::size_t i = 0; i < headers.size(); ++i) {
         http_header& h = headers[i];
         buffers.push_back(::asio::buffer(h.name));
@@ -158,13 +158,16 @@ void http_response::write_headeres() {
         buffers.push_back(::asio::buffer(StatusStrings::crlf));
     }
     buffers.push_back(::asio::buffer(StatusStrings::crlf));
+    sending_.store(true); // header 写也占用在途写标志：body 写不得与其并发（规范 §3.4）
     http_con_ref.async_buffers_write(
         std::move(buffers), [this, ptr = http_con_ref.shared_from_this()](asio::error_code ec, std::size_t length) {
+            sending_.store(false);
             if (!ptr->reference_.is_valid()) {
                 return;
             }
             if (ec) {
                 FDEBUG("http write headeres failed {}", ec.message());
+                abort_pending();
                 http_con_ref.release_obj();
                 return;
             }
@@ -194,49 +197,66 @@ bool http_response::can_set_body() const {
 }
 
 void http_response::stock_response(http_response::response_type status) {
-
-    status_ = status;
-
-    auto content           = StockReplies::toString(status_);
-    auto& new_item         = data_storage_.emplace_back();
-    new_item.type          = data_type::ref_data;
-    new_item.p_ref         = content.data();
-    new_item.ref_size      = content.size();
-    new_item.is_last_chunk = true;
-    current_body_size      = new_item.ref_size;
-    data_pending_size      = current_body_size;
-    max_body_size          = new_item.ref_size;
-    headers.resize(2);
-    headers[0].name  = "Content-Length";
-    headers[0].value = std::to_string(content.size());
-    headers[1].name  = "Content-Type";
-    headers[1].value = "text/html";
-    response_pack_status |= http_response_status_mask::http_response_finish_set;
+    // 投递到 io 线程：可能在用户线程 handler 中调用（规范 §3.2 跨线程操作必须 post）
+    asio::post(http_con_ref.socket_.get_executor(),
+               [this, status, ref = http_con_ref.shared_from_this()]() {
+                   if (!ref->reference_.is_valid()) return;
+                   status_.store(status);
+                   auto content   = StockReplies::toString(status);
+                   auto& new_item = data_storage_.emplace_back();
+                   new_item.type  = data_type::ref_data;
+                   new_item.p_ref = content.data();
+                   new_item.ref_size      = content.size();
+                   new_item.is_last_chunk = true;
+                   current_body_size.store(new_item.ref_size);
+                   data_pending_size.store(new_item.ref_size);
+                   max_body_size.store(new_item.ref_size);
+                   headers.resize(2);
+                   headers[0].name  = "Content-Length";
+                   headers[0].value = std::to_string(content.size());
+                   headers[1].name  = "Content-Type";
+                   headers[1].value = "text/html";
+                   response_pack_status |= http_response_status_mask::http_response_finish_set;
+               });
 }
 
 void http_response::set_status(response_type status) {
-
-    if (!can_set_header()) return;
-    status_ = status;
+    // 投递到 io 线程（规范 §3.2）：与 add_header/set_body_size/perform_response 的 post 保持 FIFO 顺序
+    asio::post(http_con_ref.socket_.get_executor(),
+               [this, status, ref = http_con_ref.shared_from_this()]() {
+                   if (!ref->reference_.is_valid()) return;
+                   if (!can_set_header()) return;
+                   status_.store(status);
+               });
 }
 
 void http_response::set_content_type(const std::string& extension) {
-    if (!can_set_header()) return;
-    headers[1].value = ExtensionToType(extension);
+    asio::post(http_con_ref.socket_.get_executor(),
+               [this, type = ExtensionToType(extension), ref = http_con_ref.shared_from_this()]() {
+                   if (!ref->reference_.is_valid()) return;
+                   if (!can_set_header()) return;
+                   headers[1].value = type;
+               });
 }
 
 void http_response::set_raw_content_type(const std::string& typeValue) {
-
-    if (!can_set_header()) return;
-    headers[1].value = typeValue;
+    asio::post(http_con_ref.socket_.get_executor(),
+               [this, typeValue, ref = http_con_ref.shared_from_this()]() {
+                   if (!ref->reference_.is_valid()) return;
+                   if (!can_set_header()) return;
+                   headers[1].value = typeValue;
+               });
 }
 
 void http_response::add_header(const std::string& name, const std::string& value) {
-
-    if (!can_set_header()) return;
-    auto& header = headers.emplace_back();
-    header.name  = name;
-    header.value = value;
+    asio::post(http_con_ref.socket_.get_executor(),
+               [this, name, value, ref = http_con_ref.shared_from_this()]() {
+                   if (!ref->reference_.is_valid()) return;
+                   if (!can_set_header()) return;
+                   auto& header = headers.emplace_back();
+                   header.name  = name;
+                   header.value = value;
+               });
 }
 
 void http_response::set_body_size(std::size_t max_content_length) {
@@ -245,7 +265,7 @@ void http_response::set_body_size(std::size_t max_content_length) {
                    if (!ref->reference_.is_valid()) return;
                    if (!can_set_body()) return;
                    headers[0].value = std::to_string(max_content_length);
-                   max_body_size    = max_content_length;
+                   max_body_size.store(max_content_length);
                    response_pack_status |= http_response_status_mask::http_response_body_size_set;
                    response_pack_status |= http_response_status_mask::http_response_all_headeres_set;
                });
@@ -266,10 +286,10 @@ void http_response::append_body(const void* data, std::size_t size) {
                    Fundamental::ScopeGuard guard([this]() { perform_response(); });
                    if (size > 0) {
                        data_storage_.emplace_back() = std::move(new_item);
-                       current_body_size += size;
-                       data_pending_size += size;
+                       current_body_size.fetch_add(size);
+                       data_pending_size.fetch_add(size);
                    }
-                   if (current_body_size >= max_body_size) {
+                   if (current_body_size.load() >= max_body_size.load()) {
                        response_pack_status |= http_response_status_mask::http_response_body_set;
                        if (data_storage_.size() > 0) data_storage_.back().is_last_chunk = true;
                    }
@@ -292,10 +312,10 @@ void http_response::append_body(const void* ref_data, std::size_t size, std::fun
                    Fundamental::ScopeGuard guard([this]() { perform_response(); });
                    if (size > 0) {
                        data_storage_.emplace_back() = std::move(new_item);
-                       current_body_size += size;
-                       data_pending_size += size;
+                       current_body_size.fetch_add(size);
+                       data_pending_size.fetch_add(size);
                    }
-                   if (current_body_size >= max_body_size) {
+                   if (current_body_size.load() >= max_body_size.load()) {
                        response_pack_status |= http_response_status_mask::http_response_body_set;
                        if (data_storage_.size() > 0) data_storage_.back().is_last_chunk = true;
                    }
@@ -318,10 +338,10 @@ void http_response::append_body(std::string&& body) {
 
                    if (size > 0) {
                        data_storage_.emplace_back() = std::move(new_item);
-                       current_body_size += size;
-                       data_pending_size += size;
+                       current_body_size.fetch_add(size);
+                       data_pending_size.fetch_add(size);
                    }
-                   if (current_body_size >= max_body_size) {
+                   if (current_body_size.load() >= max_body_size.load()) {
                        response_pack_status |= http_response_status_mask::http_response_body_set;
                        if (data_storage_.size() > 0) data_storage_.back().is_last_chunk = true;
                    }
@@ -343,10 +363,10 @@ void http_response::append_body(std::vector<std::uint8_t>&& body) {
                    Fundamental::ScopeGuard guard([this]() { perform_response(); });
                    if (size > 0) {
                        data_storage_.emplace_back() = std::move(new_item);
-                       current_body_size += size;
-                       data_pending_size += size;
+                       current_body_size.fetch_add(size);
+                       data_pending_size.fetch_add(size);
                    }
-                   if (current_body_size >= max_body_size) {
+                   if (current_body_size.load() >= max_body_size.load()) {
                        response_pack_status |= http_response_status_mask::http_response_body_set;
                        if (data_storage_.size() > 0) data_storage_.back().is_last_chunk = true;
                    }
@@ -355,16 +375,16 @@ void http_response::append_body(std::vector<std::uint8_t>&& body) {
 
 std::size_t http_response::get_current_body_size() const {
 
-    return current_body_size;
+    return current_body_size.load();
 }
 
 std::size_t http_response::get_data_pending_size() const {
-    return data_pending_size;
+    return data_pending_size.load();
 }
 
 http_response::response_type http_response::get_status() const {
 
-    return status_;
+    return status_.load();
 }
 
 void http_response::perform_response(bool from_async_cb) {
@@ -389,7 +409,7 @@ void http_response::perform_response(bool from_async_cb) {
             return;
         }
         // empty response
-        if (max_body_size == 0) {
+        if (max_body_size.load() == 0) {
             ref->release_obj();
             return;
         }
@@ -404,8 +424,10 @@ void http_response::perform_response(bool from_async_cb) {
             return;
         }
 
-        // a write body request is progressing
-        if (data_storage_.size() > 1 && !from_async_cb) {
+        // 单在途写（规范 §3.4）：header/body 已由同一标志串行；有在途写则返回，
+        // 完成回调负责驱动下一段（sending_ 在回调里释放）
+        if (sending_.exchange(true)) {
+            FDEBUG("post http_connection {:p} a write is in progress", (void*)this);
             return;
         }
         if (write_buffers_.empty()) {
@@ -421,6 +443,7 @@ void http_response::perform_response(bool from_async_cb) {
             case data_type::ref_data: write_buffers_.emplace_back(network_write_buffer_t(item.p_ref, item.ref_size)); break;
             default: {
                 FWARN("invalid data item type");
+                sending_.store(false);
                 http_con_ref.release_obj();
                 return;
             }
@@ -429,17 +452,19 @@ void http_response::perform_response(bool from_async_cb) {
         http_con_ref.async_buffers_write_some(
             std::vector<network_write_buffer_t>(write_buffers_.begin(), write_buffers_.end()),
             [this, ptr = http_con_ref.shared_from_this()](asio::error_code ec, std::size_t length) {
+                sending_.store(false); // 释放发送权：pop 只在完成回调，下一段由此驱动（规范 §3.4）
                 if (!http_con_ref.reference_.is_valid()) {
                     return;
                 }
                 if (ec) {
                     FDEBUG("http  write body failed {}", ec.message());
+                    abort_pending(); // 回掉未完成 ref_data 的 finish_cb，用户内存契约（规范 §5.2）
                     ptr->release_obj();
                     return;
                 }
                 ptr->b_waiting_process_any_data.exchange(false);
-                data_pending_size -= length;
-                notify_pending_size.Emit(data_pending_size);
+                data_pending_size.fetch_sub(length);
+                notify_pending_size.Emit(data_pending_size.load());
                 {
                     while (length != 0) {
                         if (write_buffers_.empty()) break;
@@ -474,6 +499,16 @@ void http_response::perform_response(bool from_async_cb) {
                 perform_response(true);
             });
     });
+}
+
+void http_response::abort_pending() {
+    // io 线程（关闭序列/写错误路径）调用：回掉所有未完成 ref_data 的 finish_cb
+    while (!data_storage_.empty()) {
+        auto& front = data_storage_.front();
+        if (front.finish_cb) front.finish_cb();
+        data_storage_.pop_front();
+    }
+    write_buffers_.clear();
 }
 
 void http_response::set_bytes_range(std::size_t start, std::size_t end, std::size_t total) {

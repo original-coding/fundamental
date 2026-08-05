@@ -108,6 +108,9 @@ public:
 
 private:
     void write_headeres();
+    /// 错误/关闭路径兜底：回掉所有未完成 ref_data 的 finish_cb 并清空待发数据（规范 §5.2/§7.2）。
+    /// 必须在 io 线程调用（关闭序列内）。
+    void abort_pending();
     void prepare();
     bool can_set_header() const;
     bool can_set_body() const;
@@ -115,14 +118,19 @@ private:
 private:
     http_connection& http_con_ref;
     std::atomic<std::uint32_t> response_pack_status = http_response_status_mask::http_response_status_none;
-    response_type status_                           = response_type::ok;
+    std::atomic<response_type> status_              = response_type::ok;
 
     /// The headers to be included in the reply.
     std::vector<http_header> headers;
 
-    std::size_t data_pending_size = 0;
-    std::size_t current_body_size = 0;
-    std::size_t max_body_size     = 0;
+    // 跨线程读（用户线程 handler 读 pending，io 线程写）
+    std::atomic<std::size_t> data_pending_size { 0 };
+    std::atomic<std::size_t> current_body_size { 0 };
+    std::atomic<std::size_t> max_body_size { 0 };
+
+    // 单在途写（规范 §3.4）：header/body 全部经同一标志串行，完成回调驱动下一段
+    std::atomic<bool> sending_ { false };
+
     std::deque<data_item> data_storage_;
     std::list<network_write_buffer_t> write_buffers_;
 };

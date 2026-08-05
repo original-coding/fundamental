@@ -22,9 +22,9 @@ enum rudp_config_type : std::uint32_t
     RUDP_UPDATE_INTERVAL_MS,
     RUDP_FASK_RESEND_SKIP_CNT,
     RUDP_ENABLE_NO_CONGESTION_CONTROL,
-    RUDP_ENABLE_AUTO_KEEPALIVE,
-    RUDP_ENABLE_STREAM_MODE,
-    RUDP_MAX_IDLE_CONNECTION_TIME_MS
+    RUDP_KEEPALIVE_INTERVAL_MS,   // data-plane keepalive probe interval (0 = disabled)
+    RUDP_KEEPALIVE_MAX_COUNT,     // max unanswered probes before the link is judged dead
+    RUDP_ENABLE_STREAM_MODE
 };
 
 namespace error

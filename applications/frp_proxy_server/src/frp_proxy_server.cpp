@@ -1,6 +1,6 @@
-#include "rpc/proxy/frp/frp_config.hpp"
-#include "rpc/proxy/frp/frp_runtime_command.hpp"
-#include "rpc/proxy/frp/frp_runtime_server.hpp"
+#include "rpc/proxy/frp/frp_config_types.hpp"
+#include "rpc/proxy/frp/frp_command.hpp"
+#include "rpc/proxy/frp/frp_server.hpp"
 
 #include "fundamental/application/application.hpp"
 #include "fundamental/basic/arg_parser.hpp"
@@ -54,14 +54,14 @@ int main(int argc, char* argv[]) {
 
     frp_public_server_config config;
     std::string error_message;
-    __register_frp_runtime_reflect_type__();
+    __register_frp_reflect_type__();
     if (!load_frp_config_file(config_path, config, error_message) || !validate_config(config, error_message)) {
         FERR("invalid frp public server config:{} err:{}", config_path, error_message);
         return 1;
     }
 
     network::init_io_context_pool(config.threads);
-    auto server = network::make_guard<frp_runtime_public_server>(std::move(config));
+    auto server = network::make_guard<frp_public_server>(std::move(config));
     server->start();
     Fundamental::Application::Instance().Loop();
     Fundamental::Application::Instance().Exit();

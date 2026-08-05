@@ -150,7 +150,6 @@ int main(int argc, char* argv[]) {
         diable_no_cwnd_control = arg_parser.HasParam("diable_no_cwnd_control");
         disable_no_delay       = arg_parser.HasParam("disable_no_delay");
         rudp_config_sys(rudp_config_type::RUDP_MTU_SIZE, mtu_size);
-        rudp_config_sys(rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
         rudp_config_sys(rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, window_size);
         rudp_config_sys(rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, window_size);
         rudp_config_sys(rudp_config_type::RUDP_UPDATE_INTERVAL_MS, interval);

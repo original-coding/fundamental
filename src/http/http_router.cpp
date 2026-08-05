@@ -21,7 +21,7 @@ std::unordered_map<std::string, MethodFilter> http_router::s_method_str_2_filter
 
 };
 
-const http_route_table& http_router::get_table(const std::string& pattern) {
+http_route_table http_router::get_table(const std::string& pattern) {
     std::scoped_lock<std::mutex> locker(mutex_);
     auto iter = route_tables.find(pattern);
     if (iter == route_tables.end()) return default_route_table;

@@ -42,12 +42,17 @@ public:
     router_(router), server_wref_(server_wref), socket_(std::move(socket)),
     timeout_check_timer_(socket_.get_executor()), timeout_msec_(timeout_msec), request_(header_case_sensitive),
     response_(*this) {
+        io_context_pool::Instance().reg_timer(timeout_check_timer_);
     }
     ~http_connection() {
+        io_context_pool::Instance().unreg_timer(timeout_check_timer_);
+        io_context_pool::Instance().unreg_object(this);
         FDEBUG("release http_connection {:p}", (void*)this);
     }
 
     void start() {
+        io_context_pool::Instance().reg_object(this,
+            [self = shared_from_this()]() { self->release_obj(); });
         request_.ip_   = socket_.remote_endpoint().address().to_string();
         request_.port_ = socket_.remote_endpoint().port();
         if (is_ssl()) {
@@ -64,7 +69,7 @@ public:
     }
 #endif
     void release_obj() {
-        reference_.release();
+        if (!reference_.release()) return; // 幂等（规范 §4.1）
         asio::post(socket_.get_executor(), [this, ref = shared_from_this()] { close(); });
     }
 
@@ -128,6 +133,8 @@ private:
                                      do_ssl_handshake(request_.buffer_.data(), kSslPreReadSize);
                                  } else {
                                      if (!enable_no_ssl_) {
+                                         release_obj();
+                                         return;
                                      }
                                      FDEBUG("[http] WARNNING!!! falling  down to no ssl socket");
                                      ssl_context_ref = nullptr;
@@ -199,7 +206,7 @@ private:
     }
     void process_http_request() {
         auto method = request_.get_method();
-        auto& h     = router_.get_table(request_.get_pattern());
+        auto h      = router_.get_table(request_.get_pattern()); // 副本：锁外不持有内部引用（规范 §5.3）
         if (!h.handler) {
             response_.stock_response(http_response::not_found);
         } else if (!(h.method_mask & method)) {
@@ -207,7 +214,16 @@ private:
 
         } else {
             response_.prepare();
-            h.handler(shared_from_this(), response_, request_);
+            try {
+                // 同步 handler 在 io 线程执行：异常不得抛入事件循环（规范 §7.1）
+                h.handler(shared_from_this(), response_, request_);
+            } catch (const std::exception& e) {
+                FWARN("http handler throw {} -> 500", e.what());
+                response_.stock_response(http_response::internal_server_error);
+            } catch (...) {
+                FWARN("http handler throw unknown -> 500");
+                response_.stock_response(http_response::internal_server_error);
+            }
         }
         response_.perform_response();
     }
@@ -216,6 +232,7 @@ private:
         response_.perform_response();
     }
     void handle_read(std::size_t offset = 0) {
+        reset_timer(); // 每次读重置超时：慢连接（无数据）才会超时（计划 P1）
         auto self(shared_from_this());
         async_buffers_read_some(
             { network_read_buffer_t(request_.buffer_.data() + offset, request_.buffer_.size() - offset) },
@@ -256,7 +273,9 @@ private:
     }
 
     void close() {
+        io_context_pool::Instance().unreg_object(this);
         cancel_timer();
+        response_.abort_pending(); // 回掉未完成 ref_data 的 finish_cb（规范 §5.2：关闭路径也回掉）
 #ifndef NETWORK_DISABLE_SSL
         if (ssl_stream_) {
             ::asio::dispatch(ssl_stream_->get_executor(), [this, ref = shared_from_this()]() {

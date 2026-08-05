@@ -1,6 +1,5 @@
-#include "rpc/proxy/frp/frp_config.hpp"
-#include "rpc/proxy/frp/frp_runtime_command.hpp"
-#include "rpc/proxy/frp/frp_runtime_client.hpp"
+#include "rpc/proxy/frp/frp_client.hpp"
+#include "rpc/proxy/frp/frp_config_types.hpp"
 
 #include "fundamental/application/application.hpp"
 #include "fundamental/basic/arg_parser.hpp"
@@ -24,49 +23,39 @@ int main(int argc, char* argv[]) {
     FINFO("frp_proxy_client built at {} {}", __DATE__, __TIME__);
 
     Fundamental::arg_parser arg_parser { argc, argv, "2.0.0" };
-    arg_parser.AddOption("config", Fundamental::StringFormat("json config path"), 'c',
+    arg_parser.AddOption("config", "json config path", 'c',
                          Fundamental::arg_parser::param_type::required_param, "path");
     arg_parser.AddOption("print-example-config", "print example json config and exit", 'p',
                          Fundamental::arg_parser::param_type::with_none_param);
 
-    if (argc == 1) {
-        arg_parser.ShowHelp();
-        return 1;
-    }
-    if (!arg_parser.ParseCommandLine() || arg_parser.HasParam()) {
-        arg_parser.ShowHelp();
-        return 1;
-    }
-    if (arg_parser.HasParam(arg_parser.kVersionOptionName)) {
-        arg_parser.ShowVersion();
-        return 0;
-    }
+    if (argc == 1) { arg_parser.ShowHelp(); return 1; }
+    if (!arg_parser.ParseCommandLine() || arg_parser.HasParam()) { arg_parser.ShowHelp(); return 1; }
+    if (arg_parser.HasParam(arg_parser.kVersionOptionName)) { arg_parser.ShowVersion(); return 0; }
+
     if (arg_parser.HasParam("print-example-config")) {
         std::cout << dump_frp_config_example_json(make_example_proxy_client_config()) << std::endl;
         return 0;
     }
 
     auto config_path = arg_parser.GetValue<std::string>("config", "");
-    if (config_path.empty()) {
-        FERR("frp_proxy_client requires --config");
+    if (config_path.empty()) { FERR("frp_proxy_client requires --config"); return 1; }
+
+    std::string error_message;
+    __register_frp_reflect_type__();
+    __register_frp_config_reflect_type__();
+    __register_frp_client_command_type__();
+
+    frp_proxy_client_config config;
+    if (!load_frp_config_file(config_path, config, error_message) ||
+        !validate_config(config, error_message)) {
+        FERR("invalid config:{} err:{}", config_path, error_message);
         return 1;
     }
 
-    std::string error_message;
-    __register_frp_runtime_reflect_type__();
-
-    // Try unified config first; fall back to old provider config
-    frp_proxy_client_config unified_config;
-    if (load_frp_config_file(config_path, unified_config, error_message) &&
-        validate_config(unified_config, error_message)) {
-        network::init_io_context_pool(unified_config.threads);
-        auto agent = network::make_guard<frp_runtime_unified_client_agent>(std::move(unified_config));
-        agent->start();
-        Fundamental::Application::Instance().Loop();
-        Fundamental::Application::Instance().Exit();
-        return 0;
-    }
-
-    FERR("invalid config:{} err:{}", config_path, error_message);
-    return 1;
+    network::init_io_context_pool(config.threads);
+    auto agent = network::make_guard<frp_unified_client>(std::move(config));
+    agent->start();
+    Fundamental::Application::Instance().Loop();
+    Fundamental::Application::Instance().Exit();
+    return 0;
 }

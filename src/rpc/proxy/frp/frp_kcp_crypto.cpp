@@ -10,50 +10,49 @@
 namespace network::proxy
 {
 
-std::vector<std::uint8_t> frp_derive_kcp_flow_key(
+std::vector<std::uint8_t> frp_derive_kcp_key(
     const std::string& traffic_secret,
-    std::uint32_t flow_id) {
+    const std::string& salt) {
 
     std::vector<std::uint8_t> key(FRP_KCP_KEY_SIZE);
 
     EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
     if (!pctx) {
-        FERR("frp_derive_kcp_flow_key: EVP_PKEY_CTX_new_id failed");
+        FERR("frp_derive_kcp_key: EVP_PKEY_CTX_new_id failed");
         return {};
     }
     if (EVP_PKEY_derive_init(pctx) <= 0) {
-        FERR("frp_derive_kcp_flow_key: EVP_PKEY_derive_init failed");
+        FERR("frp_derive_kcp_key: EVP_PKEY_derive_init failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
     if (EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256()) <= 0) {
-        FERR("frp_derive_kcp_flow_key: EVP_PKEY_CTX_set_hkdf_md failed");
+        FERR("frp_derive_kcp_key: EVP_PKEY_CTX_set_hkdf_md failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
 
-    const char* salt = "frp-kcp-v1";
+    const char* hkdf_salt = "frp-kcp-v1";
     if (EVP_PKEY_CTX_set1_hkdf_salt(pctx,
-            reinterpret_cast<const unsigned char*>(salt), static_cast<int>(std::strlen(salt))) <= 0) {
-        FERR("frp_derive_kcp_flow_key: EVP_PKEY_CTX_set1_hkdf_salt failed");
+            reinterpret_cast<const unsigned char*>(hkdf_salt), static_cast<int>(std::strlen(hkdf_salt))) <= 0) {
+        FERR("frp_derive_kcp_key: EVP_PKEY_CTX_set1_hkdf_salt failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
     if (EVP_PKEY_CTX_set1_hkdf_key(pctx,
             reinterpret_cast<const unsigned char*>(traffic_secret.data()),
             static_cast<int>(traffic_secret.size())) <= 0) {
-        FERR("frp_derive_kcp_flow_key: EVP_PKEY_CTX_set1_hkdf_key failed");
+        FERR("frp_derive_kcp_key: EVP_PKEY_CTX_set1_hkdf_key failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
 
-    std::string info = "flow:" + std::to_string(flow_id);
     if (EVP_PKEY_CTX_add1_hkdf_info(pctx,
-            reinterpret_cast<const unsigned char*>(info.data()),
-            static_cast<int>(info.size())) <= 0) {
-        FERR("frp_derive_kcp_flow_key: EVP_PKEY_CTX_add1_hkdf_info failed");
+            reinterpret_cast<const unsigned char*>(salt.data()),
+            static_cast<int>(salt.size())) <= 0) {
+        FERR("frp_derive_kcp_key: EVP_PKEY_CTX_add1_hkdf_info failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
 
     std::size_t keylen = key.size();
     if (EVP_PKEY_derive(pctx, key.data(), &keylen) <= 0) {
-        FERR("frp_derive_kcp_flow_key: EVP_PKEY_derive failed");
+        FERR("frp_derive_kcp_key: EVP_PKEY_derive failed");
         EVP_PKEY_CTX_free(pctx); return {};
     }
     EVP_PKEY_CTX_free(pctx);

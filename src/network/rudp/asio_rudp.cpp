@@ -39,13 +39,11 @@ enum rudp_command_t : std::uint8_t
     RUDP_SYN_COMMAND      = 1,
     RUDP_SYN_ACK_COMMAND  = 2,
     RUDP_SYN_ACK2_COMMAND = 4,
-    RUDP_PING_COMMAND     = 8,
-    RUDP_PONG_COMMAND     = 16,
     RUDP_RST_COMMAND      = 32,
     RUDP_SERVER_INIT_MASK = RUDP_SYN_COMMAND | RUDP_SYN_ACK2_COMMAND | RUDP_RST_COMMAND,
     RUDP_CLIENT_INIT_MASK = RUDP_SYN_ACK_COMMAND | RUDP_RST_COMMAND,
-    RUDP_CONNECTED_MASK   = RUDP_SYN_ACK_COMMAND | RUDP_PING_COMMAND | RUDP_PONG_COMMAND | RUDP_RST_COMMAND,
-    RUDP_VERIFY_SRC_MASK  = RUDP_SYN_ACK2_COMMAND | RUDP_PING_COMMAND | RUDP_PONG_COMMAND,
+    RUDP_CONNECTED_MASK   = RUDP_SYN_ACK_COMMAND | RUDP_RST_COMMAND,
+    RUDP_VERIFY_SRC_MASK  = RUDP_SYN_ACK2_COMMAND,
 };
 
 enum rudp_connection_status : std::uint32_t
@@ -115,17 +113,24 @@ struct release_kcp_wrapper {
 };
 
 struct rudp_config_item {
-    std::size_t current_value = 0;
+    // current_value 原子化：用户线程 rudp_config/rudp_config_sys 与 io 线程并发读写（规范 §2.1）
+    std::atomic<std::size_t> current_value { 0 };
     std::size_t min_value     = 0;
     std::size_t max_value     = std::numeric_limits<std::size_t>::max();
     std::size_t set_value(std::size_t new_value) {
         if (new_value < min_value) new_value = min_value;
         if (new_value > max_value) new_value = max_value;
-        current_value = new_value;
+        current_value.store(new_value, std::memory_order_relaxed);
         return new_value;
     }
     operator std::size_t() const {
-        return current_value;
+        return current_value.load(std::memory_order_relaxed);
+    }
+    // atomic 不可拷贝，逐字段复制（copy_config 使用）
+    void copy_from(const rudp_config_item& other) {
+        min_value = other.min_value;
+        max_value = other.max_value;
+        current_value.store(other.current_value.load(std::memory_order_relaxed), std::memory_order_relaxed);
     }
 };
 
@@ -145,17 +150,6 @@ struct rudp_kernel {
         return ret;
     }
 
-    static rudp_id_t get_id(Fundamental::error_code& ec) {
-        if (storage_.size() >= kMaxRudpDescriptorNums) {
-            ec = error::make_error_code(error::rudp_errors::rudp_device_or_resource_busy, "too many descriptors");
-            return 0;
-        }
-        while (storage_.find(id_) != storage_.end() || id_ == control_frame_data::kControlMagicNum) {
-            ++id_;
-        }
-        return id_;
-    }
-
     constexpr static std::size_t kMaxRudpDescriptorNums        = 1024 * 1024;
     constexpr static std::size_t kMaxRudpSocketCacheBufferNums = 1024 * 32;
     constexpr static std::size_t kMaxRudpProtocalCacheNums     = kMaxRudpSocketCacheBufferNums;
@@ -170,9 +164,9 @@ struct rudp_kernel {
     inline static rudp_config_item kUpdateIntervalMs { 10, 1, 5000 };
     inline static rudp_config_item kResendSkipCnt { 0, 0, 10 };
     inline static rudp_config_item kEnbableNoCongestionControl { 1, 0, 1 };
-    inline static rudp_config_item kEnbableAutoKeepAlive { 0, 0, 1 };
+    inline static rudp_config_item kKeepaliveIntervalMs { 0, 0, 60000 };
+    inline static rudp_config_item kKeepaliveMaxCount { 2, 1, 10 };
     inline static rudp_config_item kEnbableStreamMode { 0, 0, 1 };
-    inline static rudp_config_item kMaxConnectionIdleTimeMs { 10000, 200, 60000 };
 
     inline static std::mutex data_mutex;
     inline static rudp_id_t id_ = control_frame_data::kControlMagicNum;
@@ -193,6 +187,7 @@ struct rudp_client_context_imp {
     };
 
     rudp_client_context_imp(rudp_socket* parent);
+    ~rudp_client_context_imp();
     // external interface  active client read begin entrypoint 1
     void connect(const std::string& address,
                  std::uint16_t port,
@@ -222,18 +217,16 @@ struct rudp_client_context_imp {
     void send_syn();
     void send_ack();
     void send_ack2();
-    void send_ping();
-    void send_pong();
     void send_rst();
     //
     void accept_assign_executor(asio::io_context& new_executor);
     void restart_status_timer();
     void init_rudp_output();
+    void enable_data_keepalive();
     void notify_data_bytes_write(std::size_t len);
     void request_update_rudp_status();
     void active_request_update_rudp_status();
     void comsume_remote_frames();
-    void update_active_time();
     //
     void perform_read();
     void process_read_data(const std::uint8_t* data, std::size_t read_size);
@@ -243,19 +236,17 @@ struct rudp_client_context_imp {
     void handle_syn();
     void handle_syn_ack();
     void handle_syn_ack2();
-    void handle_ping();
-    void handle_pong();
     void handle_rst();
     //
     void write_data(const void* data, std::size_t len);
     void write_data(std::vector<std::uint8_t>&& buf, bool is_control_frame = false);
     void flush_data();
-    void health_check();
     //
     rudp_socket* const socket_ref;
     std::unique_ptr<ikcpcb, release_kcp_wrapper> kcp_object;
     std::uint32_t command_ts      = 0;
-    rudp_connection_status status = RUDP_INIT_STATUS;
+    // 生命周期状态原子化 + exchange 迁移（规范 §2.1/2.2）：任何线程可查询，迁移幂等
+    std::atomic<rudp_connection_status> status { RUDP_INIT_STATUS };
     rudp_id_t remote_id           = control_frame_data::kControlMagicNum;
     std::function<void(Fundamental::error_code)> closed_cb;
     std::function<void(Fundamental::error_code)> connected_cb;
@@ -264,6 +255,8 @@ struct rudp_client_context_imp {
 
     std::list<std::vector<std::uint8_t>> pending_control_frames;
     std::list<std::vector<std::uint8_t>> pending_data_frames;
+    // 同一 socket 至多一个在途 async_send（规范 §3.4）：KCP 一次 update 可产出多包
+    bool sending_flag = false;
     std::tuple<std::vector<std::uint8_t>, std::size_t> pending_remote_data_frame;
     std::vector<std::uint8_t> pending_remote_data_frame_swap_cache;
 
@@ -272,10 +265,7 @@ struct rudp_client_context_imp {
     std::int64_t last_rudp_update_time_point = std::numeric_limits<std::int64_t>::max();
     control_frame_data recv_control_frame;
     asio::steady_timer update_timer;
-    std::int64_t last_active_time_ms                = 0;
     rudp_force_update_status force_rudp_update_flag = rudp_force_update_status::RUDP_FORCE_UPDATE_NONE;
-    // health status check
-    asio::steady_timer health_check_timer;
     // timer for status check
     asio::steady_timer status_timer;
     std::uint8_t status_check_command        = 0;
@@ -290,7 +280,7 @@ struct rudp_server_context_imp {
     rudp_server_context_imp(rudp_socket* parent, std::size_t max_pending_connections);
     rudp_server_context_imp(rudp_socket* parent, const std::function<void(Fundamental::error_code)>& complete_func);
     ~rudp_server_context_imp() {
-
+        io_context_pool::Instance().unreg_timer(timer);
     };
     // external interface
     [[nodiscard]] Fundamental::error_code listen();
@@ -333,6 +323,18 @@ struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
         std::error_code ec;
         socket.set_option(asio::ip::udp::socket::receive_buffer_size(rudp_kernel::kMaxMtuSize), ec);
         socket.set_option(asio::ip::udp::socket::send_buffer_size(rudp_kernel::kMaxMtuSize), ec);
+        connection_timeout_msec.copy_from(rudp_kernel::kConnectTimeoutMs);
+        command_max_try_cnt.copy_from(rudp_kernel::kCommandMaxTryCnt);
+        send_window_size.copy_from(rudp_kernel::kMaxSendWindowSize);
+        recv_window_size.copy_from(rudp_kernel::kMaxRecvWindowSize);
+        mtu_size.copy_from(rudp_kernel::kMtuSize);
+        enable_no_delay.copy_from(rudp_kernel::kEnableNoDelay);
+        update_interval_ms.copy_from(rudp_kernel::kUpdateIntervalMs);
+        resend_skip_cnt.copy_from(rudp_kernel::kResendSkipCnt);
+        enable_no_congestion_control.copy_from(rudp_kernel::kEnbableNoCongestionControl);
+        stream_mode.copy_from(rudp_kernel::kEnbableStreamMode);
+        keepalive_interval.copy_from(rudp_kernel::kKeepaliveIntervalMs);
+        keepalive_max_count.copy_from(rudp_kernel::kKeepaliveMaxCount);
     }
     ~rudp_socket() {
     }
@@ -526,37 +528,37 @@ struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
     }
 
     void copy_config(const rudp_socket& server_socket) {
-        connection_timeout_msec      = server_socket.connection_timeout_msec;
-        command_max_try_cnt          = server_socket.command_max_try_cnt;
-        send_window_size             = server_socket.send_window_size;
-        recv_window_size             = server_socket.recv_window_size;
-        mtu_size                     = server_socket.mtu_size;
-        enable_no_delay              = server_socket.enable_no_delay;
-        update_interval_ms           = server_socket.update_interval_ms;
-        resend_skip_cnt              = server_socket.resend_skip_cnt;
-        enable_no_congestion_control = server_socket.enable_no_congestion_control;
-        stream_mode                  = server_socket.stream_mode;
-        auto_keepalive               = server_socket.auto_keepalive;
-        max_connection_idle_time     = server_socket.max_connection_idle_time;
+        connection_timeout_msec.copy_from(server_socket.connection_timeout_msec);
+        command_max_try_cnt.copy_from(server_socket.command_max_try_cnt);
+        send_window_size.copy_from(server_socket.send_window_size);
+        recv_window_size.copy_from(server_socket.recv_window_size);
+        mtu_size.copy_from(server_socket.mtu_size);
+        enable_no_delay.copy_from(server_socket.enable_no_delay);
+        update_interval_ms.copy_from(server_socket.update_interval_ms);
+        resend_skip_cnt.copy_from(server_socket.resend_skip_cnt);
+        enable_no_congestion_control.copy_from(server_socket.enable_no_congestion_control);
+        stream_mode.copy_from(server_socket.stream_mode);
+        keepalive_interval.copy_from(server_socket.keepalive_interval);
+        keepalive_max_count.copy_from(server_socket.keepalive_max_count);
     }
     //
     asio::ip::udp::socket socket;
     asio::ip::udp::endpoint remote_endpoint;
     const rudp_id_t id_ = control_frame_data::kControlMagicNum;
 
-    // config
-    rudp_config_item connection_timeout_msec      = rudp_kernel::kConnectTimeoutMs;
-    rudp_config_item command_max_try_cnt          = rudp_kernel::kCommandMaxTryCnt;
-    rudp_config_item send_window_size             = rudp_kernel::kMaxSendWindowSize;
-    rudp_config_item recv_window_size             = rudp_kernel::kMaxRecvWindowSize;
-    rudp_config_item mtu_size                     = rudp_kernel::kMtuSize;
-    rudp_config_item enable_no_delay              = rudp_kernel::kEnableNoDelay;
-    rudp_config_item update_interval_ms           = rudp_kernel::kUpdateIntervalMs;
-    rudp_config_item resend_skip_cnt              = rudp_kernel::kResendSkipCnt;
-    rudp_config_item enable_no_congestion_control = rudp_kernel::kEnbableNoCongestionControl;
-    rudp_config_item stream_mode                  = rudp_kernel::kEnbableStreamMode;
-    rudp_config_item auto_keepalive               = rudp_kernel::kEnbableAutoKeepAlive;
-    rudp_config_item max_connection_idle_time     = rudp_kernel::kMaxConnectionIdleTimeMs;
+    // config（atomic 不可拷贝，ctor 内逐字段 copy_from 默认值）
+    rudp_config_item connection_timeout_msec;
+    rudp_config_item command_max_try_cnt;
+    rudp_config_item send_window_size;
+    rudp_config_item recv_window_size;
+    rudp_config_item mtu_size;
+    rudp_config_item enable_no_delay;
+    rudp_config_item update_interval_ms;
+    rudp_config_item resend_skip_cnt;
+    rudp_config_item enable_no_congestion_control;
+    rudp_config_item stream_mode;
+    rudp_config_item keepalive_interval;
+    rudp_config_item keepalive_max_count;
     // runtime data
     std::atomic_bool close_flag = false;
     std::unique_ptr<rudp_client_context_imp> client_context;
@@ -664,11 +666,9 @@ void rudp_config_sys(rudp_config_type type, std::size_t value) {
     case rudp_config_type::RUDP_MTU_SIZE: rudp_kernel::kMtuSize.set_value(value); break;
     case rudp_config_type::RUDP_ENABLE_NO_DELAY: rudp_kernel::kEnableNoDelay.set_value(value); break;
     case rudp_config_type::RUDP_UPDATE_INTERVAL_MS: rudp_kernel::kUpdateIntervalMs.set_value(value); break;
-    case rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE: rudp_kernel::kEnbableAutoKeepAlive.set_value(value); break;
+    case rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS: rudp_kernel::kKeepaliveIntervalMs.set_value(value); break;
+    case rudp_config_type::RUDP_KEEPALIVE_MAX_COUNT: rudp_kernel::kKeepaliveMaxCount.set_value(value); break;
     case rudp_config_type::RUDP_ENABLE_STREAM_MODE: rudp_kernel::kEnbableStreamMode.set_value(value); break;
-    case rudp_config_type::RUDP_MAX_IDLE_CONNECTION_TIME_MS:
-        rudp_kernel::kMaxConnectionIdleTimeMs.set_value(value);
-        break;
     default: break;
     }
 }
@@ -688,11 +688,9 @@ void rudp_config(rudp_handle_t handle, rudp_config_type type, std::size_t value)
     case rudp_config_type::RUDP_MTU_SIZE: actual_handle->mtu_size.set_value(value); break;
     case rudp_config_type::RUDP_ENABLE_NO_DELAY: actual_handle->enable_no_delay.set_value(value); break;
     case rudp_config_type::RUDP_UPDATE_INTERVAL_MS: actual_handle->update_interval_ms.set_value(value); break;
-    case rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE: actual_handle->auto_keepalive.set_value(value); break;
+    case rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS: actual_handle->keepalive_interval.set_value(value); break;
+    case rudp_config_type::RUDP_KEEPALIVE_MAX_COUNT: actual_handle->keepalive_max_count.set_value(value); break;
     case rudp_config_type::RUDP_ENABLE_STREAM_MODE: actual_handle->stream_mode.set_value(value); break;
-    case rudp_config_type::RUDP_MAX_IDLE_CONNECTION_TIME_MS:
-        actual_handle->max_connection_idle_time.set_value(value);
-        break;
     default: break;
     }
 }
@@ -734,11 +732,13 @@ void rudp_server_context_imp::async_rudp_wait_connect(std::size_t max_wait_ms) {
 
 rudp_server_context_imp::rudp_server_context_imp(rudp_socket* parent, std::size_t max_pending_connections) :
 socket_ref(parent), timer(socket_ref->get_executor()), max_pending_connections(max_pending_connections) {
+    io_context_pool::Instance().reg_timer(timer);
 }
 rudp_server_context_imp::rudp_server_context_imp(rudp_socket* parent,
                                                  const std::function<void(Fundamental::error_code)>& complete_func) :
 socket_ref(parent), timer(socket_ref->get_executor()), max_pending_connections(1), wait_unique_connection_flag(true),
 wait_unique_connection_cb(complete_func) {
+    io_context_pool::Instance().reg_timer(timer);
 }
 
 void rudp_server_context_imp::async_rudp_accept(
@@ -927,14 +927,13 @@ void rudp_server_context_imp::accept_connection() {
     FDEBUG("server {}:{} accept {} left [{}/{}]", socket_ref->socket.local_endpoint().port(), socket_ref->id_,
            accept_sock->id_, connected_list.size(), accept_list.size());
     accept_sock->accept_assign_executor(ios);
-    accept_sock->client_context->closed_cb = [this, ref = socket_ref->weak_from_this(),
+    // closed_cb 捕获 server 强引用而非裸 this：server 销毁后回调仍安全（server_context 随 server 存活）
+    accept_sock->client_context->closed_cb = [server_ref = socket_ref->weak_from_this(),
                                               endpoint = accept_sock->remote_endpoint](Fundamental::error_code) {
-        auto strong = ref.lock();
-        if (!strong) return;
-        asio::dispatch(strong->get_executor(), [this, ref, endpoint]() {
-            auto strong = ref.lock();
-            if (!strong) return;
-            filter_table.erase(endpoint);
+        auto server = server_ref.lock();
+        if (!server) return;
+        asio::dispatch(server->get_executor(), [server, endpoint]() {
+            if (server->server_context) server->server_context->filter_table.erase(endpoint);
         });
     };
     asio::post(ios, [func = complete_func, accept_handle = std::make_shared<rudp_handle>(accept_sock)]() {
@@ -977,15 +976,15 @@ void rudp_server_context_imp::destroy(Fundamental::error_code ec) {
 }
 
 bool rudp_client_context_imp::is_connected() const {
-    return status == rudp_connection_status::RUDP_CONNECTED_STATUS;
+    return status.load(std::memory_order_acquire) == rudp_connection_status::RUDP_CONNECTED_STATUS;
 }
 
 bool rudp_client_context_imp::is_active() const {
-    return status > rudp_connection_status::RUDP_INIT_STATUS;
+    return static_cast<std::uint32_t>(status.load(std::memory_order_acquire)) > RUDP_INIT_STATUS;
 }
 
 bool rudp_client_context_imp::is_closed() const {
-    return status == rudp_connection_status::RUDP_CLOSED_STATUS;
+    return status.load(std::memory_order_acquire) == rudp_connection_status::RUDP_CLOSED_STATUS;
 }
 
 void rudp_client_context_imp::destroy(Fundamental::error_code e) {
@@ -993,7 +992,12 @@ void rudp_client_context_imp::destroy(Fundamental::error_code e) {
     Fundamental::error_code ec =
         error::make_error_code(error::rudp_errors::rudp_bad_file_descriptor,
                                Fundamental::StringFormat("rudp descriptor was destroy by reason {}", e));
+    // 清空待发队列在先：set_status(CLOSED) 内部入队的 RST 不会被清掉
+    pending_control_frames.clear();
+    pending_data_frames.clear();
     set_status(rudp_connection_status::RUDP_CLOSED_STATUS, ec);
+    // 驱动 RST 发送（若已有在途发送，由其完成回调继续 flush，串行发出）
+    flush_data();
 
     {
         auto tmp = std::move(pending_rudp_read_requests);
@@ -1007,18 +1011,15 @@ void rudp_client_context_imp::destroy(Fundamental::error_code e) {
             item.complete_func(0, ec);
         }
     }
-    pending_control_frames.clear();
-    pending_data_frames.clear();
     update_timer.cancel();
     status_timer.cancel();
-    health_check_timer.cancel();
 }
 
 void rudp_client_context_imp::set_status(rudp_connection_status dst_status, Fundamental::error_code ec) {
-    if (status == dst_status) return;
-    auto old_status = status;
-    status          = dst_status;
-    switch (status) {
+    // exchange：无条件写入 + 返回旧值，幂等（重复迁移直接返回，规范 §2.2）
+    auto old_status = status.exchange(dst_status, std::memory_order_acq_rel);
+    if (old_status == dst_status) return;
+    switch (dst_status) {
     case rudp_connection_status::RUDP_CONNECTED_STATUS: {
         if (old_status == rudp_connection_status::RUDP_SYN_SENT_STATUS ||
             old_status == rudp_connection_status::RUDP_SYN_RECV_STATUS) { // new connection setup
@@ -1027,12 +1028,11 @@ void rudp_client_context_imp::set_status(rudp_connection_status dst_status, Fund
                    socket_ref->socket.local_endpoint().port(),
 
                    remote_id, socket_ref->remote_endpoint.address().to_string(), socket_ref->remote_endpoint.port());
-            send_ping();
+            // 内部初始化先于用户回调（规范 §2.3：回调触发时内部状态已确定，
+            // 且回调内销毁对象后不再有后续内部操作）
+            request_update_rudp_status();
             auto call_cb = std::move(connected_cb);
             if (call_cb) call_cb({});
-            update_active_time();
-            health_check();
-            request_update_rudp_status();
         }
     } break;
     case rudp_connection_status::RUDP_CLOSED_STATUS: {
@@ -1069,7 +1069,7 @@ void rudp_client_context_imp::passive_connect(
                 status);
         return;
     }
-    if (status == rudp_connection_status::RUDP_INIT_STATUS) { // init
+    if (status.load(std::memory_order_acquire) == rudp_connection_status::RUDP_INIT_STATUS) { // init
         std::size_t remote_mtu_size = payload & 0xffffff;
         std::size_t stream_mode     = (payload >> 24) & 0x1;
         socket_ref->remote_endpoint = sender_endpoint;
@@ -1121,7 +1121,7 @@ void rudp_client_context_imp::unique_passive_connect(
                 error::make_error_code(error::rudp_errors::rudp_bad_file_descriptor, "rudp server was released"));
         return;
     }
-    if (status == rudp_connection_status::RUDP_INIT_STATUS) { // init
+    if (status.load(std::memory_order_acquire) == rudp_connection_status::RUDP_INIT_STATUS) { // init
         std::size_t remote_mtu_size = payload & 0xffffff;
         std::size_t stream_mode     = (payload >> 24) & 0x1;
         socket_ref->remote_endpoint = sender_endpoint;
@@ -1174,7 +1174,7 @@ void rudp_client_context_imp::send_ack() {
 }
 
 void rudp_client_context_imp::send_syn() {
-    if (status != rudp_connection_status::RUDP_SYN_SENT_STATUS) return;
+    if (status.load(std::memory_order_acquire) != rudp_connection_status::RUDP_SYN_SENT_STATUS) return;
     control_frame_data frame;
     frame.src_id     = socket_ref->id_;
     frame.dst_id     = remote_id;
@@ -1198,30 +1198,6 @@ void rudp_client_context_imp::send_ack2() {
     write_data(std::move(send_data), true);
 }
 
-void rudp_client_context_imp::send_ping() {
-    if (!is_connected()) return;
-    if (!socket_ref->auto_keepalive.current_value) return;
-    control_frame_data frame;
-    frame.src_id     = socket_ref->id_;
-    frame.dst_id     = remote_id;
-    frame.command    = rudp_command_t::RUDP_PING_COMMAND;
-    frame.command_ts = command_ts++;
-    auto send_data   = frame.encode();
-    write_data(std::move(send_data), true);
-    status_check_command = rudp_command_t::RUDP_PONG_COMMAND;
-    restart_status_timer();
-}
-
-void rudp_client_context_imp::send_pong() {
-    control_frame_data frame;
-    frame.src_id     = socket_ref->id_;
-    frame.dst_id     = remote_id;
-    frame.command    = rudp_command_t::RUDP_PONG_COMMAND;
-    frame.command_ts = command_ts++;
-    auto send_data   = frame.encode();
-    write_data(std::move(send_data), true);
-}
-
 void rudp_client_context_imp::send_rst() {
     if (remote_id == control_frame_data::kControlMagicNum) return;
     control_frame_data frame;
@@ -1230,21 +1206,26 @@ void rudp_client_context_imp::send_rst() {
     frame.command    = rudp_command_t::RUDP_RST_COMMAND;
     frame.command_ts = command_ts++;
     auto send_data   = frame.encode();
-    asio::const_buffer send_buf { send_data.data(), send_data.size() };
-    socket_ref->socket.async_send(std::move(send_buf),
-                                  [write_data = std::move(send_data)](std::error_code, std::size_t) {});
+    // 走统一发送队列（规范 §3.4）：不再与 flush_data 的在途发送并发 async_send
+    write_data(std::move(send_data), true);
 }
 
 void rudp_client_context_imp::accept_assign_executor(asio::io_context& new_executor) {
     if (!is_connected()) return;
-    update_timer       = std::move(asio::steady_timer(new_executor));
-    status_timer       = std::move(asio::steady_timer(new_executor));
-    health_check_timer = std::move(asio::steady_timer(new_executor));
+    // 先取消旧 executor 上挂起的定时器再迁移：pending handler 属于旧 io_context，
+    // 不取消会在旧线程操作新线程所有的成员（跨线程，规范 §3.3）
+    io_context_pool::Instance().unreg_timer(update_timer);
+    io_context_pool::Instance().unreg_timer(status_timer);
+    update_timer.cancel();
+    status_timer.cancel();
+    update_timer = std::move(asio::steady_timer(new_executor));
+    status_timer = std::move(asio::steady_timer(new_executor));
+    io_context_pool::Instance().reg_timer(update_timer);
+    io_context_pool::Instance().reg_timer(status_timer);
     // update token to avoid call perform_read twice
     ++read_token;
     asio::post(socket_ref->socket.get_executor(), [this, ref = socket_ref->weak_from_this()] {
         perform_read();
-        health_check();
         restart_status_timer();
         request_update_rudp_status();
     });
@@ -1268,7 +1249,6 @@ void rudp_client_context_imp::restart_status_timer() {
             switch (status_check_command) {
             case rudp_command_t::RUDP_SYN_ACK_COMMAND: send_syn(); break;
             case rudp_command_t::RUDP_SYN_ACK2_COMMAND: send_ack(); break;
-            case rudp_command_t::RUDP_PONG_COMMAND: send_ping(); break;
             default: break;
             }
         }
@@ -1311,6 +1291,15 @@ void rudp_client_context_imp::init_rudp_output() {
                  static_cast<std::int32_t>(socket_ref->update_interval_ms),
                  static_cast<std::int32_t>(socket_ref->resend_skip_cnt),
                  static_cast<std::int32_t>(socket_ref->enable_no_congestion_control));
+}
+
+void rudp_client_context_imp::enable_data_keepalive() {
+    // data-plane liveness detection via ikcp keepalive (defaults disabled);
+    // dead link surfaces through the ikcp_update() return value
+    if (socket_ref->keepalive_interval.current_value != 0) {
+        ikcp_enable_keepalive(kcp_object.get(), socket_ref->keepalive_interval.current_value,
+                              socket_ref->keepalive_max_count.current_value);
+    }
 }
 
 void rudp_client_context_imp::notify_data_bytes_write(std::size_t len) {
@@ -1359,7 +1348,13 @@ void rudp_client_context_imp::request_update_rudp_status() {
         // maybe canceled
         auto strong = ref.lock();
         if (!strong) return;
-        ikcp_update(kcp_object.get(), update_ts);
+        int update_ret = ikcp_update(kcp_object.get(), update_ts);
+        if (update_ret != 0) {
+            // data-plane dead link detected by keepalive probes
+            socket_ref->destroy(error::make_error_code(error::rudp_errors::rudp_timed_out,
+                                                       "keepalive detected dead link"));
+            return;
+        }
         if (force_rudp_update_flag == rudp_force_update_status::RUDP_FORCE_UPDATE_PROCESSING) {
             ikcp_flush(kcp_object.get());
         }
@@ -1442,10 +1437,6 @@ void rudp_client_context_imp::comsume_remote_frames() {
     }
 }
 
-void rudp_client_context_imp::update_active_time() {
-    last_active_time_ms = get_current_time();
-}
-
 void rudp_client_context_imp::perform_read() {
     if (!is_active()) return;
     socket_ref->socket.async_receive(
@@ -1453,6 +1444,8 @@ void rudp_client_context_imp::perform_read() {
         [this, ref = socket_ref->weak_from_this(), token = read_token](std::error_code ec, std::size_t len) {
             auto strong = ref.lock();
             if (!strong || !is_active()) return;
+            // executor 已迁移（accept_assign_executor）：旧 receive 直接丢弃，不碰 kcp/socket（规范 §3.3）
+            if (token != read_token) return;
             if (!socket_ref->socket.is_open()) return;
 
             if (ec && ec.value() != static_cast<std::int32_t>(std::errc::operation_canceled)) {
@@ -1460,12 +1453,8 @@ void rudp_client_context_imp::perform_read() {
                        strong->remote_endpoint.address().to_string(), strong->remote_endpoint.port(), ec.value(),
                        ec.message());
             }
-            Fundamental::ScopeGuard g([&]() {
-                // token has been changed
-                if (token != read_token) return;
-                perform_read();
-            });
             process_read_data(socket_read_cache.data(), len);
+            perform_read();
         });
 }
 
@@ -1494,7 +1483,6 @@ void rudp_client_context_imp::process_rudp_data_frame(const std::uint8_t* data, 
     auto ret = ikcp_input(kcp_object.get(), reinterpret_cast<const char*>(data), static_cast<long>(read_size));
     // ignore invalid data
     if (ret != 0) return;
-    update_active_time();
     comsume_remote_frames();
     active_request_update_rudp_status();
 }
@@ -1514,15 +1502,13 @@ void rudp_client_context_imp::process_control_frame(const std::uint8_t* data) {
     case rudp_command_t::RUDP_SYN_COMMAND: handle_syn(); break;
     case rudp_command_t::RUDP_SYN_ACK_COMMAND: handle_syn_ack(); break;
     case rudp_command_t::RUDP_SYN_ACK2_COMMAND: handle_syn_ack2(); break;
-    case rudp_command_t::RUDP_PING_COMMAND: handle_ping(); break;
-    case rudp_command_t::RUDP_PONG_COMMAND: handle_pong(); break;
     case rudp_command_t::RUDP_RST_COMMAND: handle_rst(); break;
     default: break;
     }
 }
 
 std::uint8_t rudp_client_context_imp::supported_commands() const noexcept {
-    switch (status) {
+    switch (status.load(std::memory_order_acquire)) {
     case rudp_connection_status::RUDP_CONNECTED_STATUS: return rudp_command_t::RUDP_CONNECTED_MASK;
     case rudp_connection_status::RUDP_SYN_RECV_STATUS: return rudp_command_t::RUDP_SERVER_INIT_MASK;
     case rudp_connection_status::RUDP_SYN_SENT_STATUS: return rudp_command_t::RUDP_CLIENT_INIT_MASK;
@@ -1545,7 +1531,7 @@ void rudp_client_context_imp::handle_syn_ack() {
            recv_control_frame.src_id, socket_ref->remote_endpoint.address().to_string(),
            socket_ref->remote_endpoint.port());
 
-    if (status == rudp_connection_status::RUDP_SYN_SENT_STATUS) {
+    if (status.load(std::memory_order_acquire) == rudp_connection_status::RUDP_SYN_SENT_STATUS) {
         // update local mtu,use the smallest mtu for communication
         if (socket_ref->mtu_size.current_value > recv_control_frame.payload) {
             socket_ref->mtu_size.set_value(recv_control_frame.payload);
@@ -1560,6 +1546,7 @@ void rudp_client_context_imp::handle_syn_ack() {
         // use remote id as kcp conv_id
         kcp_object = std::unique_ptr<ikcpcb, release_kcp_wrapper>(ikcp_create(remote_id, this));
         init_rudp_output();
+        enable_data_keepalive();
         // switch status
         set_status(rudp_connection_status::RUDP_CONNECTED_STATUS);
     }
@@ -1570,7 +1557,7 @@ void rudp_client_context_imp::handle_syn_ack2() {
     FDEBUG(" rudp connection {} recv syn ack2:{} from  {}->{}:{}", socket_ref->id_, recv_control_frame.command_ts,
            recv_control_frame.src_id, socket_ref->remote_endpoint.address().to_string(),
            socket_ref->remote_endpoint.port());
-    if (status == rudp_connection_status::RUDP_SYN_RECV_STATUS) {
+    if (status.load(std::memory_order_acquire) == rudp_connection_status::RUDP_SYN_RECV_STATUS) {
         if (status_check_command == rudp_command_t::RUDP_SYN_ACK2_COMMAND) {
             status_check_command = rudp_command_t::RUDP_UNKNOWN_COMMAND;
             // reset try_cnt
@@ -1579,21 +1566,9 @@ void rudp_client_context_imp::handle_syn_ack2() {
         ////use local id as kcp conv_id
         kcp_object = std::unique_ptr<ikcpcb, release_kcp_wrapper>(ikcp_create(socket_ref->id_, this));
         init_rudp_output();
+        enable_data_keepalive();
         // switch status
         set_status(rudp_connection_status::RUDP_CONNECTED_STATUS);
-    }
-}
-
-void rudp_client_context_imp::handle_ping() {
-    update_active_time();
-    send_pong();
-}
-
-void rudp_client_context_imp::handle_pong() {
-    update_active_time();
-    if (status_check_command == rudp_command_t::RUDP_PONG_COMMAND) {
-        // reset try_cnt
-        status_check_command_try_cnt = 0;
     }
 }
 
@@ -1601,7 +1576,7 @@ void rudp_client_context_imp::handle_rst() {
 #ifndef DEBUG_RUDP
     FDEBUG(" rudp connection {} recv rst:{} from  {}->{}:{} to {} current_status:{} remote_id:{}", socket_ref->id_,
            recv_control_frame.command_ts, recv_control_frame.src_id, socket_ref->remote_endpoint.address().to_string(),
-           socket_ref->remote_endpoint.port(), recv_control_frame.dst_id, static_cast<std::int32_t>(status), remote_id);
+           socket_ref->remote_endpoint.port(), recv_control_frame.dst_id, static_cast<std::int32_t>(status.load(std::memory_order_acquire)), remote_id);
 #endif
     if (recv_control_frame.dst_id != socket_ref->id_) return;
     if (remote_id != control_frame_data::kControlMagicNum && recv_control_frame.src_id != remote_id) return;
@@ -1621,7 +1596,8 @@ void rudp_client_context_imp::write_data(std::vector<std::uint8_t>&& buf, bool i
     asio::dispatch(socket_ref->get_executor(), [buf = std::move(buf), this, ref = socket_ref->weak_from_this(),
                                                 is_control_frame]() mutable {
         auto strong = ref.lock();
-        if (!strong || is_closed()) return;
+        // 守卫用 socket 是否 open 而非 is_closed()：RST 在 CLOSED 状态仍需发出（规范 §3.4 串行队列）
+        if (!strong || !socket_ref->socket.is_open()) return;
         if (is_control_frame) {
             pending_control_frames.emplace_back(std::move(buf));
         } else {
@@ -1646,16 +1622,17 @@ void rudp_client_context_imp::write_data(std::vector<std::uint8_t>&& buf, bool i
 }
 void rudp_client_context_imp::flush_data() {
     auto& access_list = pending_control_frames.empty() ? pending_data_frames : pending_control_frames;
-    if (access_list.empty()) return;
-    auto send_data = std::move(access_list.front());
+    if (access_list.empty() || sending_flag) return;
+    sending_flag          = true;
+    auto send_data        = std::move(access_list.front());
     access_list.pop_front();
     asio::const_buffer buffer { send_data.data(), send_data.size() };
     socket_ref->socket.async_send(std::move(buffer),
                                   [this, ref = socket_ref->weak_from_this(),
                                    send_data = std::move(send_data)](std::error_code ec, std::size_t len) {
-                                      auto strong = ref.lock();
-                                      if (!strong || !is_active()) return;
-                                      if (!socket_ref->socket.is_open()) return;
+                                      sending_flag = false; // 完成回调里释放发送权（pop 只在完成回调，规范 §3.4）
+                                      auto strong  = ref.lock();
+                                      if (!strong || !socket_ref->socket.is_open()) return;
                                       if (ec || len != send_data.size()) {
                                           FDEBUG("{} send failed size:[{}/{}] to {}:{} for {}:{}", socket_ref->id_, len,
                                                  send_data.size(), strong->remote_endpoint.address().to_string(),
@@ -1672,33 +1649,16 @@ void rudp_client_context_imp::flush_data() {
                                   });
 }
 
-void rudp_client_context_imp::health_check() {
-    if (!is_connected()) return;
-    // check active time for idle connections
-    auto now = get_current_time();
-    if (now > last_active_time_ms &&
-        static_cast<std::size_t>(now - last_active_time_ms) > socket_ref->max_connection_idle_time) {
-        socket_ref->destroy(
-            error::make_error_code(error::rudp_errors::rudp_timed_out, "actively broke idle connections "));
-        FWARN("disconnect rudp connection[{}:{}] for idle check {} > {} ", socket_ref->id_, remote_id,
-              now - last_active_time_ms, socket_ref->max_connection_idle_time.current_value);
-        return;
-    }
-    health_check_timer.cancel();
-    health_check_timer.expires_after(std::chrono::milliseconds(socket_ref->max_connection_idle_time));
-    health_check_timer.async_wait([this, ref = socket_ref->weak_from_this()](std::error_code ec) {
-        if (ec) return;
-        // maybe canceled
-        auto strong = ref.lock();
-        if (!strong) return;
-        health_check();
-    });
+rudp_client_context_imp::rudp_client_context_imp(rudp_socket* parent) :
+socket_ref(parent), update_timer(parent->get_executor()), status_timer(parent->get_executor()) {
+    socket_read_cache.resize(control_frame_data::kRudpControlFrameSize);
+    io_context_pool::Instance().reg_timer(update_timer);
+    io_context_pool::Instance().reg_timer(status_timer);
 }
 
-rudp_client_context_imp::rudp_client_context_imp(rudp_socket* parent) :
-socket_ref(parent), update_timer(parent->get_executor()), health_check_timer(parent->get_executor()),
-status_timer(parent->get_executor()) {
-    socket_read_cache.resize(control_frame_data::kRudpControlFrameSize);
+rudp_client_context_imp::~rudp_client_context_imp() {
+    io_context_pool::Instance().unreg_timer(update_timer);
+    io_context_pool::Instance().unreg_timer(status_timer);
 }
 
 void rudp_client_context_imp::connect(const std::string& address,
@@ -1710,7 +1670,7 @@ void rudp_client_context_imp::connect(const std::string& address,
             ec = error::make_error_code(error::rudp_errors::rudp_bad_file_descriptor, "rudp client was released");
             break;
         }
-        if (status == rudp_connection_status::RUDP_INIT_STATUS) { // init
+        if (status.load(std::memory_order_acquire) == rudp_connection_status::RUDP_INIT_STATUS) { // init
             asio::ip::udp::endpoint endpoint;
             auto connect_address = asio::ip::make_address(address, ec);
             if (ec) break;

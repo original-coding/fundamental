@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -26,13 +27,22 @@ public:
 
     void start() { do_read(); }
 
+    void close() {
+        std::error_code ec;
+        socket_.close(ec);
+    }
+    void set_on_close(std::function<void()> cb) { on_close_ = std::move(cb); }
+
 private:
     void do_read() {
         auto self = shared_from_this();
         socket_.async_read_some(
             asio::buffer(buf_),
             [this, self](std::error_code ec, std::size_t n) {
-                if (ec) return;
+                if (ec) {
+                    if (on_close_) on_close_();
+                    return;
+                }
                 do_write(n);
             });
     }
@@ -49,29 +59,49 @@ private:
 
     tcp::socket socket_;
     std::array<char, 65536> buf_{};
+    std::function<void()> on_close_;
 };
 
 class echo_server {
 public:
     echo_server(asio::io_context& ioc, std::uint16_t port)
         : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)) {
+        // 池停止时关闭 acceptor 与全部会话：否则 io_context 永不排空，stop() 挂死。
+        // 关闭序列投递到 io 线程执行：sessions_ 只被 io 线程访问（on_close_ 也在 io 线程）
+        network::io_context_pool::Instance().reg_object(this, [this]() {
+            asio::post(acceptor_.get_executor(), [this]() {
+                std::error_code ec;
+                acceptor_.close(ec);
+                for (auto& s : sessions_) s->close();
+                sessions_.clear();
+            });
+        });
         do_accept();
+    }
+
+    ~echo_server() {
+        network::io_context_pool::Instance().unreg_object(this);
     }
 
 private:
     void do_accept() {
         acceptor_.async_accept([this](std::error_code ec, tcp::socket socket) {
-            if (!ec) {
-                FINFO("echo_server accepted connection from {}:{}",
-                      socket.remote_endpoint().address().to_string(),
-                      socket.remote_endpoint().port());
-                std::make_shared<echo_session>(std::move(socket))->start();
-            }
+            if (ec) return;
+            FINFO("echo_server accepted connection from {}:{}",
+                  socket.remote_endpoint().address().to_string(),
+                  socket.remote_endpoint().port());
+            auto session = std::make_shared<echo_session>(std::move(socket));
+            sessions_.insert(session);
+            session->set_on_close([this, w = std::weak_ptr<echo_session>(session)]() {
+                if (auto s = w.lock()) sessions_.erase(s);
+            });
+            session->start();
             do_accept();
         });
     }
 
     tcp::acceptor acceptor_;
+    std::set<std::shared_ptr<echo_session>> sessions_;
 };
 
 // ---------------------------------------------------------------------------
@@ -142,7 +172,15 @@ public:
     udp_echo_server(asio::io_context& ioc, std::uint16_t port)
         : socket_(ioc, udp::endpoint(udp::v4(), port)) {
         FINFO("udp_echo_server listening on port {}", port);
+        network::io_context_pool::Instance().reg_object(this, [this]() {
+            std::error_code ec;
+            socket_.close(ec);
+        });
         do_receive();
+    }
+
+    ~udp_echo_server() {
+        network::io_context_pool::Instance().unreg_object(this);
     }
 
 private:

@@ -18,7 +18,7 @@ mkdir -p "${DEPLOY_DIR}"
 
 # Copy binaries
 echo "==> Copying binaries..."
-BINARIES=("frp_proxy_server" "frp_proxy_client" "traceroute")
+BINARIES=("frp_proxy_server" "frp_proxy_client")
 for bin in "${BINARIES[@]}"; do
     src="${PROJECT_DIR}/${BUILD_DIR}/applications/${bin}/${bin}"
     if [ ! -f "${src}" ]; then
@@ -60,7 +60,6 @@ cat > "${DEPLOY_DIR}/client.json" << 'CLIENT_JSON'
     "public_server_udp_port": 15000,
     "traffic_secret": "dev-secret",
     "nat_type": 2,
-    "nat_ttl": 3,
     "local_ip": "127.0.0.1",
     "data_channel_idle_timeout_seconds": 120,
     "ssl": {
@@ -169,7 +168,6 @@ FRP (Fast Reverse Proxy) 是一个基于 TCP 的内网穿透工具，支持 TCP/
 |------|------|
 | `frp_proxy_server` | 公网服务器程序 |
 | `frp_proxy_client` | 统一客户端程序 |
-| `traceroute` | 路径追踪工具 |
 | `ca_root.crt` | CA 根证书 |
 | `local.crt` | 证书文件 |
 | `local.key` | 证书私钥 |
@@ -202,7 +200,6 @@ FRP (Fast Reverse Proxy) 是一个基于 TCP 的内网穿透工具，支持 TCP/
 | `public_server_udp_port` | 服务器 UDP 端口，0=仅中继 |
 | `traffic_secret` | 流量加密密钥 |
 | `nat_type` | 0=禁用P2P, 1=Symmetric, 2=Cone |
-| `nat_ttl` | TTL 预探测值，默认 3，仅本地使用 |
 | `groups` | 服务组列表，每组有独立的 `register_key` |
 
 每组 (`groups[]`) 字段：

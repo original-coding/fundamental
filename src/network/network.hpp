@@ -111,7 +111,10 @@ template <typename T>
 struct auto_network_storage_instance : Fundamental::NonCopyable {
     using HandleType = typename decltype(Fundamental::Application::Instance().exitStarted)::HandleType;
     auto_network_storage_instance(std::shared_ptr<T> ptr) : ref_ptr(std::move(ptr)) {
-        handle_ = Fundamental::Application::Instance().exitStarted.Connect([&]() { release(); });
+        // 必须先于 io_context_pool::stop() 执行：release() 的关闭序列 post
+        // 入队后 stop() 才能等到 io 排空。Signal::Connect 的 append_mode：
+        // false = 插到队列头（先执行），true = 追加到尾部
+        handle_ = Fundamental::Application::Instance().exitStarted.Connect([&]() { release(); }, false);
     }
     auto_network_storage_instance() = default;
     ~auto_network_storage_instance() {

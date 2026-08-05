@@ -28,7 +28,7 @@ if (-not (Test-Path $WinBuildDir)) {
 # Copy Windows binaries and DLLs
 Write-Host "==> Copying Windows binaries..."
 
-$Binaries = @("frp_proxy_server", "frp_proxy_client", "traceroute")
+$Binaries = @("frp_proxy_server", "frp_proxy_client")
 foreach ($bin in $Binaries) {
     $src = Join-Path $WinBuildDir "applications/$bin/Release/$bin.exe"
     if (-not (Test-Path $src)) {

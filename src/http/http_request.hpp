@@ -3,6 +3,7 @@
 #include "http_router.hpp"
 
 #include <array>
+#include <cstddef>
 #include <optional>
 
 #include "fundamental/algorithm/range_set.hpp"
@@ -118,7 +119,8 @@ private:
             if (it.name == "content-length" || it.name == "Content-Length") {
                 char* end      = nullptr;
                 contentLength_ = std::strtoull(it.value.c_str(), &end, 10);
-                content_.reserve(contentLength_);
+                // 超限不做 reserve（防远程 bad_alloc）；body 状态会拒绝（规范 §7.1）
+                if (contentLength_ <= kMaxBodySize) content_.reserve(contentLength_);
                 return contentTransferred_ >= contentLength_;
             }
         }
@@ -169,6 +171,14 @@ private:
         expecting_newline_3,
         body // parse body state
     } state_;
+    // 解析上限（规范 §7.1：外部输入长度校验，防远程 bad_alloc/length_error 抛入 io 线程）
+    static constexpr std::size_t kMaxMethodLen        = 16;
+    static constexpr std::size_t kMaxUriLen           = 8 * 1024;
+    static constexpr std::size_t kMaxHeaderNameLen    = 256;
+    static constexpr std::size_t kMaxHeaderValueLen   = 8 * 1024;
+    static constexpr std::size_t kMaxHeaderCount      = 64;
+    static constexpr std::size_t kMaxBodySize         = 64 * 1024 * 1024;
+
     /// Buffer for incoming data.
     std::array<char, 8192> buffer_;
 

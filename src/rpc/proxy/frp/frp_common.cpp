@@ -1,4 +1,4 @@
-#include "frp_runtime_common.hpp"
+#include "frp_common.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -6,12 +6,12 @@
 namespace network::proxy
 {
 
-std::string frp_generate_runtime_uuid() {
+std::string frp_generate_uuid() {
     return Fundamental::to_string(Fundamental::GenerateUUID());
 }
 
 std::string frp_generate_server_nonce() {
-    return frp_generate_runtime_uuid();
+    return frp_generate_uuid();
 }
 
 std::string frp_hmac_sha256_hex(std::string_view secret, std::string_view payload) {

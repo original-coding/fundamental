@@ -63,13 +63,15 @@ TEST(rudp_test, basic) {
 TEST(rudp_test, no_accept_auto_disconnect) {
     Fundamental::error_code ec;
     auto server_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
-    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
-    rudp_config(server_handler, rudp_config_type::RUDP_MAX_IDLE_CONNECTION_TIME_MS, 100);
+    // keepalive dead-link detection: server probes at 100ms; the silent
+    // client sends nothing, so after one unanswered probe the server judges
+    // the link dead and tears it down (health_check idle disconnect is gone)
+    rudp_config(server_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 100);
+    rudp_config(server_handler, rudp_config_type::RUDP_KEEPALIVE_MAX_COUNT, 1);
     rudp_bind(server_handler, 42000, "::", ec);
     rudp_listen(server_handler, 10, ec);
     auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
-    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
-    rudp_config(client_handler, rudp_config_type::RUDP_MAX_IDLE_CONNECTION_TIME_MS, 2000);
+    rudp_config(client_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 0); // client stays silent
     rudp_bind(client_handler, 0, "127.0.0.1", ec);
     std::promise<void> finish_promise;
     std::string recv_buf;
@@ -210,8 +212,10 @@ TEST(rudp_test, test_stream_mode_connect) {
 TEST(rudp_test, connection_auto_disconnect) {
     Fundamental::error_code ec;
     auto server_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
-    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
-    rudp_config(server_handler, rudp_config_type::RUDP_MAX_IDLE_CONNECTION_TIME_MS, 100);
+    // keepalive dead-link detection: server probes at 100ms, silent client
+    // never answers -> link judged dead and torn down
+    rudp_config(server_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 100);
+    rudp_config(server_handler, rudp_config_type::RUDP_KEEPALIVE_MAX_COUNT, 1);
     rudp_bind(server_handler, 42000, "::", ec);
     rudp_listen(server_handler, 10, ec);
     rudp_handle_t accept_handle;
@@ -223,8 +227,7 @@ TEST(rudp_test, connection_auto_disconnect) {
                           accept_promise.set_value();
                       });
     auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
-    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
-    rudp_config(client_handler, rudp_config_type::RUDP_MAX_IDLE_CONNECTION_TIME_MS, 2000);
+    rudp_config(client_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 0); // client stays silent
     rudp_bind(client_handler, 0, "127.0.0.1", ec);
     std::promise<void> finish_promise;
     std::string recv_buf;
@@ -330,7 +333,7 @@ TEST(rudp_test, test_mtu_select) {
     rudp_config(server_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
     rudp_config(server_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, send_windows_size);
     rudp_config(server_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, recv_windows_size);
-    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 1);
+    rudp_config(server_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 5000); // data-plane keepalive
 
     rudp_bind(server_handler, 42000, "::", ec);
     rudp_listen(server_handler, 10, ec);
@@ -345,7 +348,7 @@ TEST(rudp_test, test_mtu_select) {
     rudp_config(client_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size / 2 + kRudpProtocalHeadSize);
     rudp_config(client_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, send_windows_size);
     rudp_config(client_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, recv_windows_size);
-    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 1);
+    rudp_config(client_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 5000); // data-plane keepalive
 
     rudp_bind(client_handler, 0, "127.0.0.1", ec);
     std::promise<void> connect_promise;
@@ -420,7 +423,7 @@ TEST(rudp_test, test_stream_mode) {
     rudp_config(server_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
     rudp_config(server_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, send_windows_size);
     rudp_config(server_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, recv_windows_size);
-    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 1);
+    rudp_config(server_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 5000); // data-plane keepalive
 
     rudp_bind(server_handler, 42000, "::", ec);
     rudp_listen(server_handler, 10, ec);
@@ -435,7 +438,7 @@ TEST(rudp_test, test_stream_mode) {
     rudp_config(client_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
     rudp_config(client_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, send_windows_size);
     rudp_config(client_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, recv_windows_size);
-    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 1);
+    rudp_config(client_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 5000); // data-plane keepalive
 
     rudp_bind(client_handler, 0, "127.0.0.1", ec);
     std::promise<void> connect_promise;
@@ -515,7 +518,7 @@ TEST(rudp_test, benchmark) {
     auto server_handler         = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
     rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
     rudp_config(server_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
-    rudp_config(server_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
+    rudp_config(server_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 0); // keepalive off (default)
     rudp_config(server_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, window_size);
     rudp_config(server_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, window_size);
     rudp_config(server_handler, rudp_config_type::RUDP_UPDATE_INTERVAL_MS, update_interval);
@@ -530,7 +533,7 @@ TEST(rudp_test, benchmark) {
     auto client_handler = rudp_create(network::io_context_pool::Instance().get_io_context(), ec);
     rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_STREAM_MODE, 0);
     rudp_config(client_handler, rudp_config_type::RUDP_MTU_SIZE, data_chunk_size + kRudpProtocalHeadSize);
-    rudp_config(client_handler, rudp_config_type::RUDP_ENABLE_AUTO_KEEPALIVE, 0);
+    rudp_config(client_handler, rudp_config_type::RUDP_KEEPALIVE_INTERVAL_MS, 0); // keepalive off (default)
     rudp_config(client_handler, rudp_config_type::RUDP_MAX_RECV_WINDOW_SIZE, window_size);
     rudp_config(client_handler, rudp_config_type::RUDP_MAX_SEND_WINDOW_SIZE, window_size);
     rudp_config(client_handler, rudp_config_type::RUDP_UPDATE_INTERVAL_MS, update_interval);

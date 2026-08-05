@@ -10,21 +10,22 @@ namespace network::proxy
 
 // KCP traffic encryption using AES-256-CTR (symmetric stream cipher).
 // No authentication tag -- KCP provides its own integrity checks.
-// Key derivation using HKDF-SHA256 from traffic_secret + flow_id.
+// Key derivation using HKDF-SHA256 from traffic_secret + salt.
 //
-// flow_id=0 is used for non-flow traffic (probes, startup NAT detection).
-// For data channels, the per-flow key is derived from traffic_secret + flow_id;
-// both sides derive the identical key, achieving symmetric encryption.
+// Default salt "frp-default" is used for general-purpose traffic (probes,
+// startup NAT detection, time sync).
+// For data channels, pass a per-channel salt (e.g. connection_uuid) so each
+// channel derives an independent key.
 
 constexpr std::size_t FRP_KCP_KEY_SIZE = 32;  // AES-256 key size
 constexpr std::size_t FRP_KCP_IV_SIZE  = 16;  // AES-CTR IV size
 
-// Derive per-flow KCP encryption key from traffic_secret and flow_id.
-// HKDF-SHA256 with salt "frp-kcp-v1", info "flow:<flow_id>".
-// Both sides call this with the same flow_id -> identical key (symmetric).
-std::vector<std::uint8_t> frp_derive_kcp_flow_key(
+// Derive KCP encryption key from traffic_secret and salt.
+// HKDF-SHA256 with fixed salt "frp-kcp-v1", info = salt parameter.
+// Both sides call this with the same salt -> identical key (symmetric).
+std::vector<std::uint8_t> frp_derive_kcp_key(
     const std::string& traffic_secret,
-    std::uint32_t flow_id);
+    const std::string& salt = "frp-default");
 
 // Encrypt plaintext using AES-256-CTR.
 // Returns: IV (16 bytes) + ciphertext.

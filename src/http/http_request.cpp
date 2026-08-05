@@ -93,6 +93,7 @@ std::optional<bool> http_request::Consume(char** ppInput, std::size_t* pLeftSize
         } else if (!IsChar(input) || IsCtl(input) || IsTspecial(input)) {
             return false;
         } else {
+            if (method_.size() >= kMaxMethodLen) return false;
             method_.push_back(input);
             return std::nullopt;
         }
@@ -103,6 +104,7 @@ std::optional<bool> http_request::Consume(char** ppInput, std::size_t* pLeftSize
         } else if (IsCtl(input)) {
             return false;
         } else {
+            if (uri_.size() >= kMaxUriLen) return false;
             uri_.push_back(input);
             return std::nullopt;
         }
@@ -196,6 +198,7 @@ std::optional<bool> http_request::Consume(char** ppInput, std::size_t* pLeftSize
         } else if (!IsChar(input) || IsCtl(input) || IsTspecial(input)) {
             return false;
         } else {
+            if (headers_.size() >= kMaxHeaderCount) return false;
             headers_.emplace_back();
             headers_.back().name.push_back(input);
             state_ = header_name;
@@ -211,6 +214,7 @@ std::optional<bool> http_request::Consume(char** ppInput, std::size_t* pLeftSize
             return false;
         } else {
             state_ = state::header_value;
+            if (headers_.back().value.size() >= kMaxHeaderValueLen) return false;
             headers_.back().value.push_back(input);
             return std::nullopt;
         }
@@ -221,6 +225,7 @@ std::optional<bool> http_request::Consume(char** ppInput, std::size_t* pLeftSize
         } else if (!IsChar(input) || IsCtl(input) || IsTspecial(input)) {
             return false;
         } else {
+            if (headers_.back().name.size() >= kMaxHeaderNameLen) return false;
             headers_.back().name.push_back(input);
             return std::nullopt;
         }
@@ -238,6 +243,7 @@ std::optional<bool> http_request::Consume(char** ppInput, std::size_t* pLeftSize
         } else if (IsCtl(input)) {
             return false;
         } else {
+            if (headers_.back().value.size() >= kMaxHeaderValueLen) return false;
             headers_.back().value.push_back(input);
             return std::nullopt;
         }
@@ -259,6 +265,8 @@ std::optional<bool> http_request::Consume(char** ppInput, std::size_t* pLeftSize
     }
     case state::body: {
         // Consume all size
+        if (contentLength_ > kMaxBodySize) return false;               // 超限拒绝（防远程 bad_alloc）
+        if (content_.size() + (*pLeftSize) > kMaxBodySize) return false;
         contentTransferred_ += (*pLeftSize);
         content_.append(*ppInput, *pLeftSize);
         (*ppInput) += (*pLeftSize);

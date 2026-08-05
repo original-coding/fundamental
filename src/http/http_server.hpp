@@ -42,6 +42,8 @@ public:
     void start() {
         bool expected_value = false;
         if (!has_started_.compare_exchange_strong(expected_value, true)) return;
+        io_context_pool::Instance().reg_object(this,
+            [self = shared_from_this()]() { self->release_obj(); });
         FINFO("start http server on {}:{}", acceptor_.local_endpoint().address().to_string(),
               acceptor_.local_endpoint().port());
         do_accept();
@@ -66,6 +68,7 @@ public:
         reference_.release();
         bool expected_value = true;
         if (!has_started_.compare_exchange_strong(expected_value, false)) return;
+        io_context_pool::Instance().unreg_object(this);
         asio::post(acceptor_.get_executor(), [this, ref = shared_from_this()] {
             try {
                 std::error_code ec;
