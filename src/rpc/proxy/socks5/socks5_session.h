@@ -13,9 +13,9 @@ public:
     static decltype(auto) make_shared(Args&&... args) {
         return std::make_shared<Socks5Session>(std::forward<Args>(args)...);
     }
-    explicit Socks5Session(const asio::any_io_executor& ioc_,std::shared_ptr<const SocksV5::Sock5Handler> handler, asio::ip::tcp::socket&& socket);
+    explicit Socks5Session(asio::any_io_executor ioc_,std::shared_ptr<const SocksV5::Sock5Handler> handler, asio::ip::tcp::socket&& socket);
 
-    virtual ~Socks5Session() = default;
+    virtual ~Socks5Session();
 
     asio::ip::tcp::socket& get_socket();
 
@@ -189,6 +189,9 @@ private:
     // (6) DATA user data
     void get_udp_client();
 
+    // UDP 关联期间监视 TCP 连接：客户端关闭 TCP 即终止关联（RFC 1928）
+    void start_tcp_eof_watch();
+
     void async_send_udp_message();
 
     void try_to_send_by_iterator(asio::ip::udp::resolver::results_type::const_iterator iter);
@@ -237,7 +240,7 @@ private:
     void send_to_client(size_t write_length);
 
 protected:
-    const asio::any_io_executor& ioc;
+    asio::any_io_executor ioc;
 
     asio::ip::udp::resolver udp_resolver;
     asio::ip::udp::resolver::results_type resolve_results;
@@ -300,6 +303,7 @@ protected:
     /* Common Buffer */
     std::vector<uint8_t> client_buffer;
     std::vector<uint8_t> dst_buffer;
+    std::uint8_t tcp_eof_probe = 0;
     // handler
     const std::shared_ptr<const SocksV5::Sock5Handler> ref_handler;
 };

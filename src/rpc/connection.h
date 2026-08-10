@@ -132,7 +132,7 @@ private:
     std::size_t timeout_msec_                   = 0;
     std::list<network_write_buffer_t> write_buffers_;
 
-    std::mutex read_mutex;
+    mutable std::mutex read_mutex;
     std::condition_variable read_cv_;
     std::atomic_bool is_reading_pausing = false;
 
@@ -172,11 +172,13 @@ public:
     server_wref_(server_wref), socket_(std::move(socket)), executor_(socket_.get_executor()), body_(INIT_BUF_SIZE),
     timeout_check_timer_(executor_), timeout_msec_(timeout_msec), router_(router) {
         enable_tcp_keep_alive(socket_);
+        io_context_pool::Instance().reg_timer(timeout_check_timer_);
     }
     ~connection() {
     #ifdef RPC_VERBOSE
         FDEBUG("release connection {:p} -> {}", (void*)this, conn_id_);
     #endif
+        io_context_pool::Instance().unreg_timer(timeout_check_timer_);
     }
 
     void start() {
@@ -268,6 +270,10 @@ public:
     }
     bool has_closed() const {
         return !reference_.is_valid();
+    }
+    void shutdown_send() override {
+        asio::error_code ignored_ec;
+        socket_.shutdown(tcp::socket::shutdown_send, ignored_ec);
     }
     auto get_remote_peer_ip() const {
         return remote_ip;
@@ -463,7 +469,7 @@ private:
     network_data_reference reference_;
     std::weak_ptr<rpc_server> server_wref_;
     tcp::socket socket_;
-    const asio::any_io_executor& executor_;
+    asio::any_io_executor executor_;
     char head_[kRpcHeadLen];
     std::vector<char> body_;
     std::uint64_t req_id_;
@@ -508,6 +514,7 @@ write_queue_max_size_(write_queue_max_size) {
     FDEBUG("build stream writer {:p} with connection:{:p}", (void*)this, (void*)conn_.get());
     #endif
     write_token_nums = write_queue_max_size_;
+    io_context_pool::Instance().reg_timer(timeout_check_timer_);
 }
 inline void ServerStreamReadWriter::release_obj() {
     reference_.release();
@@ -530,6 +537,7 @@ inline ServerStreamReadWriter::~ServerStreamReadWriter() {
     #ifdef RPC_VERBOSE
     FDEBUG("release stream writer {:p} with connection:{:p}", (void*)this, (void*)conn_.get());
     #endif
+    io_context_pool::Instance().unreg_timer(timeout_check_timer_);
 }
 template <typename T>
 inline bool ServerStreamReadWriter::Read(T& request, std::size_t max_wait_ms) {
@@ -638,6 +646,7 @@ inline std::error_code ServerStreamReadWriter::Finish(std::size_t max_wait_ms) {
         auto expected_value = false;
         if (!is_request_finishing.compare_exchange_strong(expected_value, true)) {
             FASSERT(false, "call ClientStreamReadWriter twice");
+            std::scoped_lock<std::mutex> locker(read_mutex);
             return last_err_;
         }
     }
@@ -653,6 +662,7 @@ inline std::error_code ServerStreamReadWriter::Finish(std::size_t max_wait_ms) {
 }
 
 inline std::error_code ServerStreamReadWriter::GetLastError() const {
+    std::scoped_lock<std::mutex> locker(read_mutex);
     return last_err_;
 }
 inline void ServerStreamReadWriter::EnableTimeoutCheck(std::size_t timeout_msec) {

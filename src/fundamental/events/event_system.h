@@ -1,5 +1,6 @@
 
 #pragma once
+#include "fundamental/basic/log.h"
 #include "event.h"
 #include "eventpp/eventdispatcher.h"
 #include "eventpp/eventqueue.h"
@@ -243,7 +244,15 @@ inline void SignalBase<ReturnType(Args...), PoliciesType>::Emit(Args... args) co
 
 template <typename PoliciesType, typename ReturnType, typename... Args>
 inline void SignalBase<ReturnType(Args...), PoliciesType>::operator()(Args... args) const {
-    _connections->broken_call(std::forward<Args>(args)...);
+    try {
+        _connections->broken_call(std::forward<Args>(args)...);
+    } catch (const std::exception& e) {
+        // 信号回调（用户回调/网络错误回调等）不允许把异常抛到 io 线程：
+        // 记录并继续，避免 event loop 被单个回调打挂
+        FERR("signal callback throw exception:{}", e.what());
+    } catch (...) {
+        FERR("signal callback throw unknown exception");
+    }
 }
 
 template <typename Prototype_, typename Policies_ = eventpp::DefaultPolicies>

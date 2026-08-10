@@ -23,6 +23,7 @@ target_include_directories(${app_target_name}
 set_target_properties(${app_target_name} PROPERTIES
     FOLDER ${apps_dir_name}
 )
+config_enable_sanitize_address_check(${app_target_name})
 target_link_libraries(${app_target_name}
     PRIVATE
     BuildSettings

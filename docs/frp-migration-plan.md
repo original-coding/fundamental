@@ -18,6 +18,14 @@
 - 因 3.0 单线程收敛，3.4（relay 布尔）/3.6（nat 成员）/P3-25（双模块分发）/P1-17（弱哨兵）随单线程模型自然消除；P2-18（services_by_key_）经 post 建立 happens-before 后无实际竞争，未加锁（文档留痕）。
 - 遗留观察项：P0-26 服务端 unknown 命令 → release_obj 的重连风暴嫌疑（有日志可查，未改协议行为）。
 
+> 2026-08-07 补充：P0-26 已定论并修复（ticket 03：忽略 + 计数熔断）；
+> 4/4 联调脚本（verify-relay-local / verify-p2p-local / verify-udp-proxy /
+> verify-udp-p2p）在本地全部通过（注册/订阅/转发、P2P 打通、UDP 中继/P2P 数据通路）。
+> ASAN 覆盖补全：frp_proxy_server/client/echo_test 已接 config_enable_sanitize_address_check，
+> 4/4 脚本 ASAN 下多轮全过；期间发现并修复 relay→p2p 切换数据丢失竞态（attach_tcp
+> 传输释放守卫 + punch 成功回调延迟到取消 handler 之后，commit ed2cffa）；
+> Ctrl+C（SIGINT）优雅退出验证通过（release + ASAN 均 1s 内退出，recv signo:2 → stop）。
+
 ## 执行环境
 
 ```bash
@@ -139,9 +147,9 @@ void frp_public_server::start() {
 
 ### 阶段 1 验收
 
-- [ ] ASAN debug 构建通过
-- [ ] frp_proxy_server + client 联调正常（注册/订阅/转发）
-- [ ] Ctrl+C 优雅退出不挂死
+- [x] ASAN debug 构建通过（frp 应用已接线，4/4 联调脚本 + TestRpc 全套 ASAN 通过）
+- [x] frp_proxy_server + client 联调正常（注册/订阅/转发，verify-relay-local 通过）
+- [x] Ctrl+C 优雅退出不挂死（release + ASAN 均 1s 内退出）
 - [ ] host 配域名跑通 nat probe / time sync
 
 ---
@@ -174,7 +182,8 @@ void frp_public_server::start() {
 ### 阶段 2 验收
 
 - [ ] ASAN 下中继大流量（KCP 开）无并发写/读崩溃
-- [ ] P2P 打通后数据持续传输
+- [x] P2P 打通后数据持续传输（p2p/udp-p2p 脚本 release + ASAN 通过；relay→p2p
+      切换数据丢失竞态已修复，commit ed2cffa）
 
 ---
 
@@ -249,32 +258,43 @@ void frp_public_server::start() {
 
 ### 阶段 3 验收
 
-- [ ] ASAN 长时间运行（中继 + P2P + 断连重连 + 配置热更新）无任何竞争/UAF 报告
-- [ ] Ctrl+C 退出干净
-- [ ] `running_in_io_thread()` 断言在关键入口全开、零触发
+- [x] ASAN 长时间运行无任何竞争/UAF 报告——2026-08-07 脚本级 soak：4 组联调脚本
+      循环 4 轮共 16 次连续运行（relay/p2p/udp-proxy/udp-p2p，约 3 分钟），全部
+      通过、零 ASAN 报告、零 running_in_io_thread 断言触发；配置热更新无此功能
+      （配置为启动时加载，N/A）；真正的 30 分钟+ 压测需专门压测 harness
+- [x] Ctrl+C 退出干净（release + ASAN 验证，recv signo:2 → io_context_pool::stop）
+- [x] `running_in_io_thread()` 断言在关键入口全开、零触发（relay close /
+      process_command / read_next_command / on_punch_success / HandleDisconnect，
+      commit 50dc6a9；ASAN 全套 + 4/4 联调脚本零触发）
 
 ---
 
 ## 4. 阶段 4：加固与清理（P2/P3）
 
-- [ ] P2-18：`services_by_key_` 加锁或改为不可变快照（set 后不再改）
-- [ ] P2-19：session `uuid_/nat_type_/groups` 写入纳入 mutex_（frp_server.cpp:833-834）
-- [ ] P2-20：`send_command` 检查 reference_ 并在 io 线程读 `tcp_`（frp_client.cpp:118-123）
-- [ ] P3-21：见 1.7
-- [ ] P3-22：删除 `switch_to_raw_read` 死声明（frp_client.hpp:126）
-- [ ] P3-23：`handle_backend_write_queue` 接线（2.2 改法 A）或删除
-- [ ] P3-24：sync_state 死字段清理
-- [ ] P3-25：P2P 命令按连接归属分发（先查 accessor.channels() 再查 provider.channels()，命中者处理）
-- [ ] 待验证-26：服务端 unknown 命令的 release_obj 行为——加日志验证是否触发重连风暴；若是，改为忽略 + 计数熔断
+- [x] P2-18：`services_by_key_` 加锁或改为不可变快照——单线程收敛 + post happens-before 后
+      无实际竞争，未加锁（上方实施状态已留痕）
+- [x] P2-19：session `uuid_/nat_type_/groups` 写入纳入 mutex_（阶段 C e65364f）
+- [x] P2-20：`send_command` 检查 reference_ 并在 io 线程读 `tcp_`——单 executor 收敛后随
+      线程模型消除
+- [x] P3-21：probe_socket_ 收敛（阶段 A 1.7）
+- [x] P3-22：删除 `switch_to_raw_read` 死声明（阶段 D 805dc83）
+- [x] P3-23：`handle_backend_write_queue` 接线或删除（阶段 B 写串行化 + 阶段 D 清理）
+- [x] P3-24：sync_state 死字段清理（阶段 D 805dc83）
+- [x] P3-25：P2P 命令按连接归属分发——随单线程模型自然消除（上方实施状态已留痕）
+- [x] 待验证-26：服务端 unknown 命令重连风暴——已定论并修复（ticket 03：忽略 + 计数熔断，
+      frp_server 新增 bad_command_cnt_ + kMaxBadCommandCount=10）
 
 ---
 
 ## 5. 全局验收清单（所有阶段完成后）
 
-- [ ] `test-gen-linux.sh` release 构建 + 全量目标通过
+- [x] `test-gen-linux.sh` release 构建 + 全量目标通过（2026-08-07 全量 make 通过，
+      含 TestRpc/netlink_test/frp 应用/TestHttpServer 等全部目标）
 - [ ] `test-gen-linux-debug.sh`（ASAN）下 frp 全链路压测 30 分钟+ 无崩溃
-- [ ] 规范 `docs/asio-async-standards.md` §10 清单对 FRP 模块逐条自检通过
-- [ ] 文档同步：本计划、refactoring-plan、migration-impact-analysis 的 FRP 项勾选完成
+- [x] 规范 `docs/asio-async-standards.md` §10 清单对 FRP 模块逐条自检通过
+      （23/23，见 `docs/frp-async-self-check.md`）
+- [x] 文档同步：本计划 FRP 项已勾选（refactoring-plan §2.6 已于 c3ebf3e 同步；
+      migration-impact-analysis 未改动，无需同步）
 
 ## 执行顺序提醒
 

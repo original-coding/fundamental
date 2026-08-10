@@ -24,6 +24,7 @@ set_target_properties(${lib_name} PROPERTIES
     FOLDER ${src_root_dir_name}
 )
 
+config_enable_sanitize_address_check(${lib_name})
 
 target_include_directories(${lib_name} PUBLIC
     $<BUILD_INTERFACE:${src_root_dir}>

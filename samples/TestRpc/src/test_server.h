@@ -2,8 +2,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <future>
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace network
+{
+namespace rpc_service
+{
+class connection;
+}
+} // namespace network
+
+// 测试观察口：捕获最近一次 on_net_err 的服务端连接（仅测试基础设施使用，不影响库代码）
+void set_last_error_conn(std::shared_ptr<network::rpc_service::connection> conn);
+void clear_last_error_conn();
+bool was_last_error_fired();
+std::weak_ptr<network::rpc_service::connection> get_last_error_conn();
 
 struct person {
     std::size_t id;

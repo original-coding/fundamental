@@ -76,7 +76,19 @@ protected:
                 finish_cb_(ec, msg);
                 return;
             }
-            auto [status, read_size] = http_response_context.parse(cache_buffer.data(), cache_buffer.size());
+            websocket::http_handler_context::parse_status status;
+            std::size_t read_size = 0;
+            try {
+                std::tie(status, read_size) = http_response_context.parse(cache_buffer.data(), cache_buffer.size());
+            } catch (const std::exception& e) {
+                // 解析异常（bad_alloc 等）不得抛到 io 线程
+                finish_cb_(std::make_error_code(std::errc::bad_message),
+                           Fundamental::StringFormat("ws response parse exception:{}", e.what()));
+                return;
+            } catch (...) {
+                finish_cb_(std::make_error_code(std::errc::bad_message), "ws response parse unknown exception");
+                return;
+            }
             switch (status) {
             case websocket::http_handler_context::parse_need_more_data: {
                 handle_greeting_response();

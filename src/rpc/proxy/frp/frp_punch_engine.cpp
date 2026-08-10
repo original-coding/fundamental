@@ -348,6 +348,7 @@ void frp_punch_engine::on_accessor_confirm_ok(std::uint16_t local_port, std::uin
 void frp_punch_engine::on_punch_success(std::uint16_t local_port, std::uint16_t peer_port,
                                          std::uint16_t external_local_port, std::uint16_t external_peer_port)
 {
+    FASSERT(io_context_pool::Instance().running_in_io_thread(), "on_punch_success must run on io thread");
     if (result_delivered_) return;
     result_delivered_ = true;
 
@@ -365,7 +366,16 @@ void frp_punch_engine::on_punch_success(std::uint16_t local_port, std::uint16_t 
           connection_uuid_, local_port, peer_port,
           result.peer_endpoint.address().to_string(), result.peer_endpoint.port());
 
-    if (on_success_) on_success_(std::move(result));
+    if (on_success_) {
+        // 交接前确保 punch 阶段挂在该 socket 上的 pending receive 先被取消：
+        // cancel() 的完成 handler 异步执行，若立即挂 relay 读循环会形成同 socket 双接收者，
+        // 首个 p2p 数据包可能被已取消的 punch 接收吃掉（ASAN 慢速下必现数据丢失）。
+        // 用 post 把成功回调排到取消 handler 之后（同一 io 线程 FIFO 顺序执行）。
+        auto executor = result.socket ? result.socket->get_executor() : asio::any_io_executor();
+        asio::post(executor, [cb = std::move(on_success_), result = std::move(result)]() mutable {
+            cb(std::move(result));
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

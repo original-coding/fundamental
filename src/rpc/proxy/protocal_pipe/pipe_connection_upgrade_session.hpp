@@ -56,7 +56,19 @@ protected:
     }
 
     void handle_greeting_response() {
-        auto [status, len] = response.decode(read_buffer.data(), read_buffer.size());
+        forward::forward_parse_status status;
+        std::size_t len = 0;
+        try {
+            std::tie(status, len) = response.decode(read_buffer.data(), read_buffer.size());
+        } catch (const std::exception& e) {
+            // 解析异常（bad_alloc 等）不得抛到 io 线程
+            finish_cb_(std::make_error_code(std::errc::bad_message),
+                       Fundamental::StringFormat("pipe decode exception:{}", e.what()));
+            return;
+        } catch (...) {
+            finish_cb_(std::make_error_code(std::errc::bad_message), "pipe decode unknown exception");
+            return;
+        }
         switch (status) {
         case forward::forward_parse_status::forward_parse_need_more_data: {
             read_buffer.resize(len);

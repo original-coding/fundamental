@@ -323,10 +323,15 @@ Fundamental::error_code netlink::send_data(std::string data,
             auto& new_context          = contexts[no];
             new_context                = std::make_shared<send_context>();
             new_context->dst_player_no = no;
+            // op_context 用 weak 捕获：send_context 由 contexts map 持有，回调内 lock 使用；
+            // 强引用会形成 send_context<->result_cb 环，成功 erase 的 context 永久泄漏
             new_context->result_cb     = std::make_shared<netlink_flush_interface::netlink_status_change_cb>(
-                [&, op_context = new_context](netlink_flush_interface::flush_data_status status,
-                                              Fundamental::error_code send_ec, std::string ret_data) mutable {
-                    auto& context                   = *op_context;
+                [&, op_context = std::weak_ptr<send_context>(new_context)](
+                    netlink_flush_interface::flush_data_status status, Fundamental::error_code send_ec,
+                    std::string ret_data) mutable {
+                    auto context_ptr = op_context.lock();
+                    if (!context_ptr) return;
+                    auto& context                   = *context_ptr;
                     context.status                  = status;
                     context.send_ec                 = send_ec;
                     context.ret_data                = std::move(ret_data);

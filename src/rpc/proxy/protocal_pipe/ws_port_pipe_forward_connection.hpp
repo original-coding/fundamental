@@ -52,6 +52,10 @@ private:
     const asio::any_io_executor& get_current_executor() override {
         return executor_;
     }
+    void shutdown_send() override {
+        asio::error_code ignored_ec;
+        socket_.shutdown(::asio::ip::tcp::socket::shutdown_send, ignored_ec);
+    }
 
     void close() {
 
@@ -61,7 +65,7 @@ private:
     }
     network_data_reference reference_;
     ::asio::ip::tcp::socket socket_;
-    const asio::any_io_executor& executor_;
+    asio::any_io_executor executor_;
 };
 // connect proxy host ->[ssl_handle shake] ->ws proxy handshake->raw proxy
 class ws_port_pipe_forward_connection : public rpc_forward_connection {

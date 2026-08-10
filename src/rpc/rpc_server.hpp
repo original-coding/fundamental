@@ -50,6 +50,7 @@ public:
     void start() {
         bool expected_value = false;
         if (!has_started_.compare_exchange_strong(expected_value, true)) return;
+        io_context_pool::Instance().reg_object(this, [self = shared_from_this()] { self->release_obj(); });
         FINFO("start rpc server on {}:{}", acceptor_.local_endpoint().address().to_string(),
               acceptor_.local_endpoint().port());
         do_accept();
@@ -150,6 +151,7 @@ public:
 
     void release_obj() {
         reference_.release();
+        io_context_pool::Instance().unreg_object(this);
         bool expected_value = true;
         if (!has_started_.compare_exchange_strong(expected_value, false)) return;
         asio::post(acceptor_.get_executor(), [this, ref = shared_from_this()] {
@@ -186,7 +188,8 @@ public:
                     return cb(std::to_string(size) + " " + std::to_string(static_cast<std::size_t>(purpose)));
                 });
             auto verify_flag = ::asio::ssl::verify_peer;
-            if (!ssl_config_.ca_certificate_path.empty() && std_fs::is_regular_file(ssl_config.ca_certificate_path)) {
+            if (!ssl_config_.ca_certificate_path.empty() &&
+                std_fs::is_regular_file(ssl_config_.ca_certificate_path)) {
                 ssl_context->load_verify_file(ssl_config_.ca_certificate_path);
             } else {
                 ssl_context->set_default_verify_paths();

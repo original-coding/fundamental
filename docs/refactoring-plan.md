@@ -116,19 +116,24 @@
 - 或统一用公共的延迟任务封装（参照 asio2 `post_cp` 的 timed_tasks_ 注册表 + `stop_all_timed_events`）
 
 ### 2.6 基础层修复清单（先做）
-- [ ] `executor_` 改为按值成员（connection.h、rpc_client.hpp）
+- [x] `executor_` 改为按值成员（connection.h、rpc_client.hpp，round-2 commit 6146751）
 - [x] `next_io_context_` 原子化（2026-08-03 已改）
-- [ ] io 线程异常不 FASSERT：记录日志 + 尝试恢复/优雅退出
+- [x] io 线程异常不 FASSERT：记录日志 + 尝试恢复/优雅退出（Signal/解析/序列化/用户回调
+      逐层兜底，run() 最后防线改为记录 + restart 恢复，commit 323104d）
 - [x] `io_context_pool::stop()` 优雅序列：幂等守卫 → 唤醒 wait_stop → 取消已登记定时器 → 释放 work guard → 阻塞等待全部 io_context 排空（2026-08-03 已改；线程由 BlockTimePool 管理，无法 join，以"等待 io_context stopped"替代）
 - [x] 新增 `wait_stop()`：阻塞直到 stop() 被调用（asio2 wait_stop_timer_ 同款机制）
 - [x] 新增定时器注册表 `reg_timer/unreg_timer`：stop 时统一取消（解决"stop 后定时器存活导致无法退出"）
 - [x] 新增 `running_in_io_thread()`：线程亲和性断言基础设施
 - [x] 新增对象注册表 `reg_object/unreg_object`：stop() 统一驱动已登记对象释放（保证"池停 → 所有对象必然被 stop"；与顶层对象的 make_guard 互补，覆盖 server 动态创建的 session）
 - [x] `stop()` 顺序修正：先驱动对象释放 → 再取消定时器 → 再等待 io 排空（2026-08-03 已改）
-- [ ] http Content-Length 上限校验（防远程 bad_alloc）
-- [ ] rpc `FASSERT(message.size() < MAX_BUF_LEN)` 改为错误返回
-- [ ] 各模块定时器创建点接入 `reg_timer/unreg_timer`（frp_signal_client 三个定时器、relay_data_channel 两个定时器等）
-- [ ] 动态对象（server accept 的 session/通道）接入 `reg_object/unreg_object`（frp_signal_session、relay_data_channel 等）
+- [x] http Content-Length 上限校验（防远程 bad_alloc，commit 40cc76d）
+- [x] rpc `FASSERT(message.size() < MAX_BUF_LEN)` 改为错误返回（pack 端
+      `>= MAX_BUF_LEN` 拦截走错误通道，rpc_client.hpp:510/802；write() 内 FASSERT 仅为
+      不可达防御，commit 6146751）
+- [x] 各模块定时器创建点接入 `reg_timer/unreg_timer`（frp_signal_client 三个定时器、
+      relay_data_channel 两个定时器等，frp 阶段 A/C + round-2 已完成）
+- [x] 动态对象（server accept 的 session/通道）接入 `reg_object/unreg_object`
+      （frp_signal_session、relay_data_channel 等，frp 阶段 C + round-2 已完成）
 
 ---
 

@@ -21,6 +21,8 @@ set_target_properties(${app_target_name} PROPERTIES
     FOLDER ${samples_dir_name}
 )
 
+config_enable_sanitize_address_check(${app_target_name})
+
 if(MSVC)
     set_property(TARGET ${app_target_name} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR})
 endif()

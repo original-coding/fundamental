@@ -19,6 +19,9 @@ struct proxy_upstream_interface {
     virtual const asio::any_io_executor& get_current_executor()                                          = 0;
     virtual void release_obj()                                                                           = 0;
     virtual void probe_protocal(std::size_t offset = 0, std::size_t target_probe_size = 0) {};
+    // 半关闭传播：上游不再有数据时通知下游对端（默认空实现，无 FIN 语义的通道无需覆写）
+    virtual void shutdown_send() {
+    }
 };
 
 class rpc_forward_connection : public std::enable_shared_from_this<rpc_forward_connection> {

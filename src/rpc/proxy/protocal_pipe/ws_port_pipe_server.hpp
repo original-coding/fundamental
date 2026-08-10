@@ -28,6 +28,7 @@ public:
     void start() {
         bool expected_value = false;
         if (!has_started_.compare_exchange_strong(expected_value, true)) return;
+        io_context_pool::Instance().reg_object(this, [self = shared_from_this()] { self->release_obj(); });
         FINFO("start ws port forward server on {}:{}", acceptor_.local_endpoint().address().to_string(),
               acceptor_.local_endpoint().port());
         do_accept();
@@ -39,6 +40,7 @@ public:
 
     void release_obj() {
         reference_.release();
+        io_context_pool::Instance().unreg_object(this);
         bool expected_value = true;
         if (!has_started_.compare_exchange_strong(expected_value, false)) return;
         asio::post(acceptor_.get_executor(), [this, ref = shared_from_this()] {

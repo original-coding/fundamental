@@ -154,6 +154,7 @@ private:
     void handle_register_services_phase(const frp_register_services_data& request);
     void handle_subscribe_services_phase(const frp_subscribe_services_data& request);
     void handle_channel_open_phase(const frp_channel_open_request_data& request);
+    void handle_unknown_command(std::uint32_t command, const char* phase);
     void send_auth_failure_and_close(const std::string& message);
     void close_socket();
     void ssl_handshake();
@@ -185,6 +186,9 @@ private:
     std::vector<frp_service_group> groups;
 
     bool authenticated_ = false;
+    // 未知/异常命令计数熔断：超过阈值才释放，避免服务端成为重连风暴的主动方（ticket 03）
+    std::size_t bad_command_cnt_ = 0;
+    static constexpr std::size_t kMaxBadCommandCount = 10;
     upgrade_forward_function forward_cb_;
     upgrade_release_function release_cb_;
 #ifndef NETWORK_DISABLE_SSL

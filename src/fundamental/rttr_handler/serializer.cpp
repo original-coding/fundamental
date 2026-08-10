@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "fundamental/basic/log.h"
 #include "serializer.h"
 #ifdef _MSC_VER
     #pragma warning(push)
@@ -387,11 +388,20 @@ namespace io
 {
 
 std::string to_json(const rttr::variant& var, const RttrSerializeOption& option) {
-    if (var.is_type<nlohmann::json>()) {
-        return var.get_value<nlohmann::json>().dump(4);
+    try {
+        if (var.is_type<nlohmann::json>()) {
+            return var.get_value<nlohmann::json>().dump(4);
+        }
+        Fundamental::json json_obj = to_json_obj(var, option);
+        return json_obj.dump(4);
+    } catch (const std::exception& e) {
+        // 序列化异常（bad_alloc/类型转换等）不得抛到 io 线程：记录并返回空对象
+        FERR("to_json throw exception:{}", e.what());
+        return "{}";
+    } catch (...) {
+        FERR("to_json throw unknown exception");
+        return "{}";
     }
-    Fundamental::json json_obj = to_json_obj(var, option);
-    return json_obj.dump(4);
 }
 
 std::string to_comment_json(const rttr::variant& var, const RttrSerializeOption& option) {

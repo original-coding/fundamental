@@ -373,7 +373,13 @@ void relay_data_channel::set_transport(std::shared_ptr<frp_tcp_channel> tc) { at
 
 void relay_data_channel::attach_tcp(std::shared_ptr<frp_tcp_channel> tc) {
     tcp_ = std::move(tc);
-    tcp_->set_on_release([self = shared_from_this()]() { self->close(); });
+    tcp_->set_on_release([self = shared_from_this()]() {
+        // p2p 升级期间/之后的中继传输释放是预期行为（accessor 升级成功后主动释放传输，
+        // 服务端随之传播对端会话释放），不视为通道关闭——否则 kcp/p2p socket 被销毁，
+        // 升级瞬间的在途数据丢失（ASAN 慢速下必现）。
+        // 真实断链（无 punch 进行、未升级）仍走统一关闭序列。
+        if (!self->is_p2p_active() && !self->punch_engine()) self->close();
+    });
 }
 
 void relay_data_channel::set_on_release(std::function<void()> cb) { on_release_ = std::move(cb); }
@@ -387,6 +393,7 @@ void relay_data_channel::release_obj() {
 
 void relay_data_channel::close() {
     if (closed_.exchange(true)) return; // CAS 幂等
+    FASSERT(io_context_pool::Instance().running_in_io_thread(), "relay_data_channel::close must run on io thread");
     // 关闭路径可观测：中继断开（对端 FIN/错误/超时/主动）在此留痕，否则无法从日志判断释放
     FINFO("relay_data_channel close conn={} peer={} transport={} reason=closed", connection_uuid_, peer_uuid_,
           static_cast<int>(transport_));

@@ -57,8 +57,10 @@ private:
 
 struct rpc_request_context {
     rpc_request_context(asio::io_context& ios) : timeout_check_timer(ios) {
+        io_context_pool::Instance().reg_timer(timeout_check_timer);
     }
     ~rpc_request_context() {
+        io_context_pool::Instance().unreg_timer(timeout_check_timer);
     }
     void finish(const asio::error_code& ec, std::string_view data) {
         bool expected_value = false;
@@ -226,10 +228,7 @@ private:
         --write_token_nums;
         return true;
     }
-    void start() {
-        read_head();
-        EnableAutoHeartBeat(true, kDefaultPoorNetworkCheckInternalMsec);
-    }
+    void start();
     void send_heartbeat() {
         auto& new_item = write_cache_.emplace_back();
         new_item.size  = 0;
@@ -269,6 +268,8 @@ private:
     void handle_write();
     void check_pause_read();
     void try_resume_read();
+    bool epoch_mismatch() const;
+    void abort_for_epoch_mismatch();
 
 private:
     network_data_reference reference_;
@@ -278,6 +279,8 @@ private:
     std::atomic<rpc_stream_data_status> last_data_status_ = rpc_stream_data_status::rpc_stream_none;
 
     std::shared_ptr<rpc_client> client_;
+    // upgrade 时捕获的客户端连接代次；连接重建（重连）后代次变化，流即失效
+    std::uint64_t connection_epoch_ = 0;
 
     std::deque<std::vector<std::uint8_t>> response_cache_;
     std::deque<rpc_stream_packet> write_cache_;
@@ -285,7 +288,7 @@ private:
     std::atomic_bool b_wait_any_data = false;
     asio::steady_timer deadline_;
     std::size_t timeout_msec_ = 0;
-    std::mutex read_mutex;
+    mutable std::mutex read_mutex;
     std::condition_variable read_cv_;
     std::atomic_bool is_reading_pausing = false;
 
@@ -330,14 +333,24 @@ public:
 #ifdef RPC_VERBOSE
         FDEBUG(" client construct {:p}", (void*)this);
 #endif
+        io_context_pool::Instance().reg_timer(reconnect_delay_timer_);
+        io_context_pool::Instance().reg_timer(deadline_);
     }
     ~rpc_client() {
 #ifdef RPC_VERBOSE
         FDEBUG(" client deconstruct {:p}", (void*)this);
 #endif
+        io_context_pool::Instance().unreg_timer(reconnect_delay_timer_);
+        io_context_pool::Instance().unreg_timer(deadline_);
         for (auto& i : proxy_interfaces)
             if (i) i->abort_all_operation();
         proxy_interfaces.clear();
+        // 析构兜底：释放 reference_ 让在途回调退出，关闭定时器/socket 避免在活 io_context 上销毁活跃对象
+        reference_.release();
+        asio::error_code ignored_ec;
+        deadline_.cancel();
+        reconnect_delay_timer_.cancel();
+        socket_.close(ignored_ec);
     }
     void config_tcp_no_delay(bool flag = true) {
         tcp_no_delay_flag = flag;
@@ -353,7 +366,9 @@ public:
     bool connect(size_t timeout_msec = kDefaultNetworkTimeOutMsec) {
         if (has_connected()) return true;
         FASSERT(!service_name_.empty());
-        do_async_connect();
+        // 先离开 closed 状态再投递：wait_conn 的谓词依赖 connected||closed，否则会立即误判失败
+        change_connection_status(rpc_connection_wait_connecting);
+        asio::post(ios_, [this, ref = shared_from_this()] { do_async_connect(); });
         return wait_conn(timeout_msec);
     }
 
@@ -374,7 +389,7 @@ public:
             service_name_ = service;
         }
 
-        do_async_connect();
+        asio::post(ios_, [this, ref = shared_from_this()] { do_async_connect(); });
     }
 
     bool wait_conn(size_t timeout_msec) {
@@ -392,11 +407,13 @@ public:
     }
 
     void enable_timeout_check(bool enable = true, std::size_t timeout_msec = 30000) {
-        if (enable) {
-            reset_deadline_timer(timeout_msec);
-        } else {
-            deadline_.cancel();
-        }
+        asio::post(ios_, [this, enable, timeout_msec, ref = shared_from_this()] {
+            if (enable) {
+                reset_deadline_timer(timeout_msec);
+            } else {
+                deadline_.cancel();
+            }
+        });
     }
     void append_proxy(std::shared_ptr<network_upgrade_interface> proxy) {
         if (!proxy) return;
@@ -490,6 +507,11 @@ public:
 
         rpc_service::msgpack_codec codec;
         auto ret = codec.pack(std::forward<Args>(args)...);
+
+        if (ret.size() >= MAX_BUF_LEN) {
+            new_call->finish(error::make_error_code(error::rpc_errors::rpc_bad_request), "");
+            return result_context<req_result> { new_call->call_id, std::move(future), new_call, nullptr };
+        }
 
         auto delay_post_func = [this, ref = weak_from_this(), call_id = new_call->call_id, ret = std::move(ret),
                                 func_id = md5_hasher::MD5Hash32(rpc_name.data())]() mutable {
@@ -722,6 +744,7 @@ private:
         if (!has_connected() && !forced_close) return;
         change_connection_status(rpc_connection_closed);
         auto final_clear_function = [this, ptr = shared_from_this()]() {
+            ++connection_epoch_;
             asio::error_code ec;
             socket_.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
             socket_.close(ec);
@@ -740,23 +763,26 @@ private:
     std::shared_ptr<rpc_request_context> EmplaceNewCall(std::size_t timeout_msec = 15000) {
         auto p = std::make_shared<rpc_request_context>(ios_);
         if (timeout_msec == 0) timeout_msec = 15000;
-        p->timeout_check_timer.expires_after(std::chrono::milliseconds(timeout_msec));
-        p->timeout_check_timer.async_wait(
-            [p = std::weak_ptr<rpc_request_context>(p), this, ptr = weak_from_this()](const asio::error_code& ec) {
-                auto strong = ptr.lock();
-                if (!strong) return;
-                if (!reference_.is_valid()) {
-                    return;
-                }
-                if (ec) return;
-                auto p_instance = p.lock();
-                if (p_instance) {
-                    p_instance->finish(error::make_error_code(error::rpc_errors::rpc_timeout), "");
-                    std::unique_lock<std::mutex> lock(rpc_calls_mtx_);
-                    FDEBUG("{:p} remove call {} because of timeout", (void*)this, p_instance->call_id);
-                    rpc_calls_map_.erase(p_instance->call_id);
-                }
-            });
+        // 定时器创建/挂载一律在 io 线程执行，避免用户线程与 io 线程并发操作同一 timer
+        asio::post(ios_, [p, ref = shared_from_this(), timeout_msec] {
+            if (!ref->reference_.is_valid()) return;
+            p->timeout_check_timer.expires_after(std::chrono::milliseconds(timeout_msec));
+            p->timeout_check_timer.async_wait(
+                [p = std::weak_ptr<rpc_request_context>(p), client = std::weak_ptr<rpc_client>(ref)](
+                    const asio::error_code& ec) {
+                    auto strong = client.lock();
+                    if (!strong) return;
+                    if (!strong->reference_.is_valid()) return;
+                    if (ec) return;
+                    auto p_instance = p.lock();
+                    if (p_instance) {
+                        p_instance->finish(error::make_error_code(error::rpc_errors::rpc_timeout), "");
+                        std::unique_lock<std::mutex> lock(strong->rpc_calls_mtx_);
+                        FDEBUG("{:p} remove call {} because of timeout", (void*)strong.get(), p_instance->call_id);
+                        strong->rpc_calls_map_.erase(p_instance->call_id);
+                    }
+                });
+        });
         {
             std::unique_lock<std::mutex> lock(rpc_calls_mtx_);
             next_call_id_++;
@@ -774,6 +800,10 @@ private:
 
         rpc_service::msgpack_codec codec;
         auto ret = codec.pack(std::forward<Args>(args)...);
+        if (ret.size() >= MAX_BUF_LEN) {
+            new_call->finish(error::make_error_code(error::rpc_errors::rpc_bad_request), "");
+            return result_context<req_result> { new_call->call_id, std::move(future), new_call };
+        }
         write(new_call->call_id, call_type, std::move(ret), 0);
         return result_context<req_result> { new_call->call_id, std::move(future), new_call };
     }
@@ -800,24 +830,33 @@ private:
             if (reconnect_cnt_ > 0) {
                 reconnect_cnt_--;
             }
+            // async_reconnect 只从 closed 进入（防双重连），先落回 closed
+            change_connection_status(rpc_connection_closed);
             async_reconnect();
             return false;
         };
+        auto epoch = connection_epoch_.load();
         change_connection_status(rpc_connection_dns_resolving);
         resolver_.async_resolve(
             host_, service_name_,
-            [this, error_handle_func, ptr = shared_from_this()](const std::error_code& ec,
-                                                                const decltype(resolver_)::results_type& endpoints) {
+            [this, error_handle_func, epoch, ptr = shared_from_this()](const std::error_code& ec,
+                                                                       const decltype(resolver_)::results_type& endpoints) {
                 if (!reference_.is_valid()) {
+                    return;
+                }
+                if (epoch != connection_epoch_.load()) {
                     return;
                 }
                 if (!error_handle_func(ec)) return;
                 // connect endpoint using resolver results
                 change_connection_status(rpc_connection_tcp_handshaking);
                 asio::async_connect(socket_, endpoints,
-                                    [this, error_handle_func, ptr = shared_from_this()](
+                                    [this, error_handle_func, epoch, ptr = shared_from_this()](
                                         const asio::error_code& ec, const asio::ip::tcp::endpoint& endpoint) {
                                         if (!reference_.is_valid()) {
+                                            return;
+                                        }
+                                        if (epoch != connection_epoch_.load()) {
                                             return;
                                         }
                                         if (!error_handle_func(ec)) return;
@@ -939,6 +978,10 @@ private:
         if (!reference_.is_valid()) {
             return;
         }
+        // 仅从 closed 状态进入重连，防多路错误回调启动多个重连定时器
+        if (connection_status.load() != rpc_connection_closed) {
+            return;
+        }
         reset_socket();
         change_connection_status(rpc_connection_wait_connecting);
         reconnect_delay_timer_.expires_after(std::chrono::milliseconds(reconnect_delay_ms));
@@ -968,6 +1011,10 @@ private:
                 return;
             }
             if (has_upgrade) return;
+            if (ec) {
+                // 取消（池停 cancel_registered_timers 等）时不再重挂，否则 io_context 永不排空
+                return;
+            }
             if (!ec) {
                 if (has_connected()) {
                     if (b_wait_any_data) {
@@ -1017,10 +1064,14 @@ private:
             if (write_size > 0)
                 write_buffers_.emplace_back(network_read_buffer_t((char*)msg.content.data(), write_size));
         }
+        auto epoch = connection_epoch_.load();
         async_buffers_write_some(
             std::vector<network_write_buffer_t>(write_buffers_.begin(), write_buffers_.end()),
-            [this, ptr = shared_from_this()](const asio::error_code& ec, size_t length) {
+            [this, ptr = shared_from_this(), epoch](const asio::error_code& ec, size_t length) {
                 if (!reference_.is_valid()) {
+                    return;
+                }
+                if (epoch != connection_epoch_.load()) {
                     return;
                 }
                 if (ec) {
@@ -1071,9 +1122,13 @@ private:
     }
 
     void do_read() {
+        auto epoch = connection_epoch_.load();
         async_buffers_read({ network_read_buffer_t(head_.data(), kRpcHeadLen) },
-                           [this, ptr = shared_from_this()](const asio::error_code& ec, const size_t length) {
+                           [this, ptr = shared_from_this(), epoch](const asio::error_code& ec, const size_t length) {
                                if (!reference_.is_valid()) {
+                                   return;
+                               }
+                               if (epoch != connection_epoch_.load()) {
                                    return;
                                }
                                if (!socket_.is_open()) {
@@ -1119,11 +1174,15 @@ private:
 
     void read_body(std::uint64_t req_id, request_type req_type, size_t body_len, std::size_t read_offset = 0) {
         FASSERT(read_offset < body_len);
+        auto epoch = connection_epoch_.load();
         async_buffers_read_some(
             { network_read_buffer_t(body_.data() + read_offset, body_len - read_offset) },
-            [this, req_id, req_type, body_len, read_offset, ptr = shared_from_this()](asio::error_code ec,
-                                                                                      std::size_t length) {
+            [this, req_id, req_type, body_len, read_offset, epoch, ptr = shared_from_this()](asio::error_code ec,
+                                                                                             std::size_t length) {
                 if (!reference_.is_valid()) {
+                    return;
+                }
+                if (epoch != connection_epoch_.load()) {
                     return;
                 }
                 if (!socket_.is_open()) {
@@ -1265,7 +1324,7 @@ private:
             asio::error_code igored_ec;
             socket_.close(igored_ec);
         } while (0);
-
+        ++connection_epoch_;
         socket_ = decltype(socket_)(ios_);
     }
 
@@ -1439,7 +1498,7 @@ private:
     asio::io_context& ios_;
     asio::ip::tcp::resolver resolver_;
     asio::ip::tcp::socket socket_;
-    const asio::any_io_executor& executor_;
+    asio::any_io_executor executor_;
 
     std::string host_;
     std::string service_name_;
@@ -1451,6 +1510,8 @@ private:
     std::mutex status_mutex_;
     std::condition_variable status_cv;
     std::atomic<rpc_connection_status> connection_status = rpc_connection_closed;
+    // 每次关闭/重建 socket 时递增；旧连接代次的在途回调据此退出，避免与新 socket 交错
+    std::atomic<std::uint64_t> connection_epoch_{0};
 
     std::atomic_bool b_wait_any_data = false;
     asio::steady_timer deadline_;
@@ -1508,11 +1569,20 @@ write_queue_max_size_(write_queue_max_size) {
 #ifdef RPC_VERBOSE
     FDEBUG("build stream writer {:p} with client:{:p}", (void*)this, (void*)&client_);
 #endif
+    io_context_pool::Instance().reg_timer(deadline_);
 }
 inline ClientStreamReadWriter::~ClientStreamReadWriter() {
 #ifdef RPC_VERBOSE
     FDEBUG("release stream writer {:p} with client:{:p}", (void*)this, (void*)&client_);
 #endif
+    io_context_pool::Instance().unreg_timer(deadline_);
+}
+inline void ClientStreamReadWriter::start() {
+    // 绑定当前连接代次：客户端重建连接（重连）后，本流的所有异步操作必须终止，
+    // 不得落到新 socket 上（避免流帧写入新 RPC 连接/双读）
+    connection_epoch_ = client_->connection_epoch_.load();
+    read_head();
+    EnableAutoHeartBeat(true, kDefaultPoorNetworkCheckInternalMsec);
 }
 template <typename T>
 inline bool ClientStreamReadWriter::Read(T& request, std::size_t max_wait_ms) {
@@ -1619,6 +1689,7 @@ inline std::error_code ClientStreamReadWriter::Finish(std::size_t max_wait_ms) {
         auto expected_value = false;
         if (!is_request_finishing.compare_exchange_strong(expected_value, true)) {
             FASSERT(false, "call ClientStreamReadWriter twice");
+            std::scoped_lock<std::mutex> locker(read_mutex);
             return last_err_;
         }
     }
@@ -1642,10 +1713,12 @@ inline std::error_code ClientStreamReadWriter::Finish(std::size_t max_wait_ms) {
         }
     } while (0);
 
+    std::scoped_lock<std::mutex> locker(read_mutex);
     return last_err_;
 }
 
 inline std::error_code ClientStreamReadWriter::GetLastError() const {
+    std::scoped_lock<std::mutex> locker(read_mutex);
     return last_err_;
 }
 inline void ClientStreamReadWriter::EnableAutoHeartBeat(bool enable, std::size_t timeout_msec) {
@@ -1666,6 +1739,11 @@ inline void ClientStreamReadWriter::release_obj() {
         }
         deadline_.cancel();
         client_->close(true);
+        if (last_data_status_ == rpc_stream_data_status::rpc_stream_failed) {
+            // 连接错误导致的流失败：close 完成后走客户端统一错误路径（enable_auto_reconnect 时自动重连）；
+            // 正常 Finish/用户主动 release 不会走到这里
+            client_->error_callback(error::make_error_code(error::rpc_errors::rpc_broken_pipe));
+        }
     });
 }
 inline std::string ClientStreamReadWriter::get_remote_peer_ip() const {
@@ -1675,6 +1753,10 @@ inline std::uint16_t ClientStreamReadWriter::get_remote_peer_port() const {
     return client_->get_remote_peer_port();
 }
 inline void ClientStreamReadWriter::read_head() {
+    if (epoch_mismatch()) {
+        abort_for_epoch_mismatch();
+        return;
+    }
     if (is_reading_pausing) return;
     std::vector<network_read_buffer_t> buffers;
     buffers.emplace_back(network_read_buffer_t(&read_packet_buffer.size, sizeof(read_packet_buffer.size)));
@@ -1683,6 +1765,10 @@ inline void ClientStreamReadWriter::read_head() {
     client_->async_buffers_read(
         std::move(buffers), [this, ptr = shared_from_this()](asio::error_code ec, std::size_t length) {
             if (!reference_.is_valid()) {
+                return;
+            }
+            if (epoch_mismatch()) {
+                abort_for_epoch_mismatch();
                 return;
             }
             if (last_data_status_ >= rpc_stream_data_status::rpc_stream_finish) return;
@@ -1736,12 +1822,20 @@ inline void ClientStreamReadWriter::read_head() {
         });
 }
 inline void ClientStreamReadWriter::read_body(std::uint32_t offset) {
+    if (epoch_mismatch()) {
+        abort_for_epoch_mismatch();
+        return;
+    }
     std::vector<network_read_buffer_t> buffers;
     buffers.emplace_back(
         network_read_buffer_t(read_packet_buffer.data.data() + offset, read_packet_buffer.size - offset));
     client_->async_buffers_read_some(
         std::move(buffers), [this, offset, ptr = shared_from_this()](asio::error_code ec, std::size_t length) {
             if (!reference_.is_valid()) {
+                return;
+            }
+            if (epoch_mismatch()) {
+                abort_for_epoch_mismatch();
                 return;
             }
             if (last_data_status_ >= rpc_stream_data_status::rpc_stream_write_done) return;
@@ -1796,7 +1890,27 @@ inline void ClientStreamReadWriter::set_status(rpc_stream_data_status status, st
         release_obj();
     }
 }
+inline bool ClientStreamReadWriter::epoch_mismatch() const {
+    return connection_epoch_ != client_->connection_epoch_.load();
+}
+inline void ClientStreamReadWriter::abort_for_epoch_mismatch() {
+    {
+        std::scoped_lock<std::mutex, std::mutex> locker(read_mutex, write_mutex);
+        if (last_data_status_.load() >= rpc_stream_data_status::rpc_stream_finish) {
+            return;
+        }
+        last_err_         = error::make_error_code(error::rpc_errors::rpc_broken_pipe);
+        last_data_status_ = rpc_stream_data_status::rpc_stream_failed;
+    }
+    read_cv_.notify_all();
+    write_cv_.notify_all();
+    notify_stream_abort.Emit();
+}
 inline void ClientStreamReadWriter::handle_write() {
+    if (epoch_mismatch()) {
+        abort_for_epoch_mismatch();
+        return;
+    }
     if (last_data_status_.load() >= rpc_stream_data_status::rpc_stream_finish) {
         return;
     }
@@ -1816,6 +1930,10 @@ inline void ClientStreamReadWriter::handle_write() {
         std::vector<network_write_buffer_t>(write_buffers_.begin(), write_buffers_.end()),
         [this, ptr = shared_from_this()](asio::error_code ec, std::size_t length) {
             if (!reference_.is_valid()) {
+                return;
+            }
+            if (epoch_mismatch()) {
+                abort_for_epoch_mismatch();
                 return;
             }
             if (last_data_status_ >= rpc_stream_data_status::rpc_stream_finish) return;

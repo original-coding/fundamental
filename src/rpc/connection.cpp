@@ -311,11 +311,12 @@ void connection::read_body(uint32_t func_id, std::size_t size, std::size_t start
             }
             if (!socket_.is_open()) {
                 on_net_err_(self, "socket already closed");
+                release_obj();
                 return;
             }
             if (ec) {
-                // do't close socket, wait for write done
                 on_net_err_(self, ec.message());
+                release_obj();
                 return;
             }
             b_waiting_process_any_data.exchange(false);

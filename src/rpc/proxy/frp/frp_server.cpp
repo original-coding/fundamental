@@ -322,6 +322,7 @@ void frp_signal_session::start_protocol() {
 }
 
 void frp_signal_session::read_next_command() {
+    FASSERT(io_context_pool::Instance().running_in_io_thread(), "read_next_command must run on io thread");
     auto read_payload = [this, self = shared_from_this()](std::error_code ec, std::size_t) {
         if (!reference_.is_valid()) return;
         if (ec) {
@@ -366,6 +367,7 @@ void frp_signal_session::read_next_command() {
 }
 
 void frp_signal_session::process_command(std::string payload) {
+    FASSERT(io_context_pool::Instance().running_in_io_thread(), "process_command must run on io thread");
     frp_command_base base_command;
     if (!Fundamental::io::from_json(payload, base_command)) {
         FWARN("signal_session failed to parse command uuid={} mode={}", uuid_, static_cast<int>(mode_));
@@ -422,8 +424,7 @@ void frp_signal_session::handle_initial_phase(const frp_command_base& command, s
         return;
     }
     default:
-        FWARN("signal_session unknown command={} in initial phase uuid={}", command.command, uuid_);
-        release_obj();
+        handle_unknown_command(command.command, "initial");
         return;
     }
 }
@@ -497,10 +498,21 @@ void frp_signal_session::handle_authenticated_phase(const frp_command_base& comm
         return;
     }
     default:
-        FWARN("signal_session unknown command={} in authenticated phase uuid={}", command.command, uuid_);
+        handle_unknown_command(command.command, "authenticated");
+        return;
+    }
+}
+
+void frp_signal_session::handle_unknown_command(std::uint32_t command, const char* phase) {
+    ++bad_command_cnt_;
+    FWARN("signal_session unknown command={} in {} phase uuid={} bad_cnt={}", command, phase, uuid_, bad_command_cnt_);
+    if (bad_command_cnt_ >= kMaxBadCommandCount) {
+        // 累计异常命令过多：释放防滥用（正常/新版客户端不会触发）
         release_obj();
         return;
     }
+    // 忽略并继续读取：服务端不作为重连风暴的主动方，同时兼容未知的新命令类型
+    read_next_command();
 }
 
 void frp_signal_session::send_auth_failure_and_close(const std::string& message) {

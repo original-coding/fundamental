@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <mutex>
 #include <rttr/registration>
 #include <thread>
 
@@ -279,6 +280,24 @@ void test_echo_stream(rpc_conn conn) {
         w);
 }
 
+void test_echo_kill_stream(rpc_conn conn) {
+    auto c = conn.lock();
+    auto w = c->InitRpcStream();
+    FWARN("try start test_echo_kill_stream");
+    rpc_stream_pool.Enqueue(
+        [](decltype(w) stream) {
+            std::string msg;
+            if (stream->Read(msg, 5000)) {
+                if (!stream->Write(msg)) return; // echo
+                std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等 echo 送达再断流
+                stream->release_obj();           // 断流：触发客户端自动重连
+            }
+            stream->WriteDone();
+            (void)stream->Finish(0);
+        },
+        w);
+}
+
 void test_echo_delay_limit_stream(rpc_conn conn) {
     auto c  = conn.lock();
     auto w  = c->InitRpcStream();
@@ -404,12 +423,14 @@ void server_task(std::promise<void>& sync_p) {
     server.register_handler("test_write_stream", test_write_stream);
     server.register_handler("test_broken_stream", test_broken_stream);
     server.register_handler("test_echo_stream", test_echo_stream);
+    server.register_handler("test_echo_kill_stream", test_echo_kill_stream);
     server.register_handler("test_echo_delay_limit_stream", test_echo_delay_limit_stream);
     server.register_handler("test_abort_stream", test_abort_stream);
     server.register_handler("object_echo<int>", object_echo<int>);
     server.register_handler("object_echo<TestProxyRequest>", object_echo<TestProxyRequest>);
     server.register_handler("test_control_stream", test_control_stream);
     server.on_net_err.Connect([](std::shared_ptr<connection> conn, std::string reason) {
+        set_last_error_conn(conn);
         std::cout << "remote client address: " << conn->remote_address() << " networking error, reason: " << reason
                   << "\n";
     });
@@ -464,4 +485,30 @@ void exit_server() {
     FDEBUG("exit server 1");
     if (s_thread) s_thread->join();
     FDEBUG("exit server");
+}
+
+// ---- 测试观察口实现（不参与库代码） ----
+namespace
+{
+std::mutex s_error_conn_mtx;
+std::weak_ptr<network::rpc_service::connection> s_last_error_conn;
+std::atomic_bool s_last_error_fired = false;
+} // namespace
+
+void set_last_error_conn(std::shared_ptr<network::rpc_service::connection> conn) {
+    std::scoped_lock<std::mutex> locker(s_error_conn_mtx);
+    s_last_error_conn = std::move(conn);
+    s_last_error_fired.store(true, std::memory_order_release);
+}
+void clear_last_error_conn() {
+    std::scoped_lock<std::mutex> locker(s_error_conn_mtx);
+    s_last_error_conn.reset();
+    s_last_error_fired.store(false, std::memory_order_release);
+}
+bool was_last_error_fired() {
+    return s_last_error_fired.load(std::memory_order_acquire);
+}
+std::weak_ptr<network::rpc_service::connection> get_last_error_conn() {
+    std::scoped_lock<std::mutex> locker(s_error_conn_mtx);
+    return s_last_error_conn;
 }

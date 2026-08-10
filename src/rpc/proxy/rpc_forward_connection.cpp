@@ -18,20 +18,44 @@ traffic_control_timer(ref_executor_) {
 #ifndef NETWORK_DISABLE_SSL
     ssl_config_.disable_ssl = true;
 #endif
+    io_context_pool::Instance().reg_timer(idle_check_timer);
+    io_context_pool::Instance().reg_timer(delay_reconnect_timer);
+    io_context_pool::Instance().reg_timer(traffic_control_timer);
 }
 
 void rpc_forward_connection::start() {
-    RestartTimeoutIdleCheck();
+    // 池停时由注册表直接驱动本对象释放（级联不依赖定时器）
+    io_context_pool::Instance().reg_object(this, [self = shared_from_this()] { self->release_obj(); });
+    // 空闲检测：只 arm 一次，后续活动仅滑动 deadline（RestartTimeoutIdleCheck）。
+    // 强引用持有（与其余 handler 一致，且对象已由 reg_object 强持有）
+    idle_check_timer.expires_after(std::chrono::milliseconds(idle_check_interval_msec));
+    idle_check_timer.async_wait([this, self = shared_from_this()](const asio::error_code& ec) {
+        if (!reference_.is_valid()) {
+            return;
+        }
+        if (ec) {
+            return;
+        }
+        try {
+            HandleDisconnect(std::make_error_code(std::errc::timed_out),
+                             Fundamental::StringFormat("[idle check] for  interval {} msec", idle_check_interval_msec));
+        } catch (...) {
+        }
+    });
 
     process_protocal();
 }
 
 rpc_forward_connection::~rpc_forward_connection() {
+    io_context_pool::Instance().unreg_timer(idle_check_timer);
+    io_context_pool::Instance().unreg_timer(delay_reconnect_timer);
+    io_context_pool::Instance().unreg_timer(traffic_control_timer);
     FDEBUG("~rpc_forward_connection");
 }
 
 void rpc_forward_connection::release_obj() {
     reference_.release();
+    io_context_pool::Instance().unreg_object(this);
     asio::post(ref_executor_, [this, ref = shared_from_this()] {
         try {
             HandleDisconnect({}, "release_obj");
@@ -47,6 +71,7 @@ void rpc_forward_connection::set_forward_speed_limit(std::size_t forward_limit_s
 void rpc_forward_connection::HandleDisconnect(asio::error_code ec,
                                               const std::string& callTag,
                                               std::uint32_t closeMask) {
+    FASSERT(io_context_pool::Instance().running_in_io_thread(), "HandleDisconnect must run on io thread");
     // borken pipe when write failed
     if (has_status(closeMask, UpstreamWriting)) {
         closeMask |= DownstreamReading;
@@ -58,9 +83,15 @@ void rpc_forward_connection::HandleDisconnect(asio::error_code ec,
         FDEBUG("disconnect for {} {}-> ec:{}-{}", callTag, closeMask, ec.category().name(), ec.message());
     // enter half connection pipe status
     if (has_any_status(closeMask, UpstreamReading | DownstreamReading)) {
-        idle_check_interval_msec = idle_check_interval_msec > kHalfConnectionStatusIdleCheckIntervalMsec
-                                       ? kHalfConnectionStatusIdleCheckIntervalMsec
-                                       : idle_check_interval_msec;
+        // 半关闭传播：死亡方向的对端收到 FIN；存活方向继续转发（不丢数据），
+        // 拆除由双向自然 EOF 完成，idle 定时器仅作对端永不关闭的兜底
+        if (has_status(closeMask, UpstreamReading)) {
+            asio::error_code ignored_ec;
+            proxy_socket_.shutdown(asio::ip::tcp::socket::shutdown_send, ignored_ec);
+        }
+        if (has_status(closeMask, DownstreamReading)) {
+            if (upstream) upstream->shutdown_send();
+        }
         // now we should remove traffic control
         traffic_control_timer.cancel();
         // no limit
@@ -258,7 +289,7 @@ void rpc_forward_connection::DoProxyConnect(asio::ip::tcp::resolver::results_typ
             }
 
             if (ec) {
-                FDEBUG("connect to {}:{} ec:{} error:{} kMaxReconnectCnts:{} {}", proxy_host, proxy_service,
+                FDEBUG("connect to {}:{} ec:{} error:{} kMaxReconnectCnts:{}", proxy_host, proxy_service,
                        static_cast<std::int32_t>(ec.value()), ec.message(), kMaxReconnectCnts);
                 if (kMaxReconnectCnts > 0 && ec.category() == asio::system_category()) {
                     auto err_num = static_cast<std::errc>(ec.value());
@@ -388,23 +419,8 @@ void rpc_forward_connection::FallBackProtocal() {
 }
 
 void rpc_forward_connection::RestartTimeoutIdleCheck() {
-    idle_check_timer.cancel();
+    // 滑动空闲超时：只推进 deadline（挂起的 async_wait 期限随之更新），避免每包 cancel+重挂的抖动
     idle_check_timer.expires_after(std::chrono::milliseconds(idle_check_interval_msec));
-    idle_check_timer.async_wait([this, self = weak_from_this()](const asio::error_code& ec) {
-        auto strong = self.lock();
-        if (!strong) return;
-        if (!reference_.is_valid()) {
-            return;
-        }
-        if (ec) {
-            return;
-        }
-        try {
-            HandleDisconnect(std::make_error_code(std::errc::timed_out),
-                             Fundamental::StringFormat("[idle check] for  interval {} msec", idle_check_interval_msec));
-        } catch (...) {
-        }
-    });
 }
 
 void rpc_forward_connection::RestartTrafficControlUpdate() {

@@ -5,11 +5,17 @@ namespace SocksV5
 {
 using network::network_read_buffer_t;
 using network::network_write_buffer_t;
-Socks5Session::Socks5Session(const asio::any_io_executor& ioc_,
+Socks5Session::Socks5Session(asio::any_io_executor ioc_,
                              std::shared_ptr<const SocksV5::Sock5Handler> handler,
                              asio::ip::tcp::socket&& socket_) :
 ioc(ioc_), udp_resolver(ioc_), socket(std::move(socket_)), dst_socket(ioc_), deadline(ioc_), ref_handler(handler) {
     deadline.expires_at(asio::steady_timer::time_point::max());
+    network::io_context_pool::Instance().reg_timer(deadline);
+}
+
+Socks5Session::~Socks5Session() {
+    network::io_context_pool::Instance().unreg_timer(deadline);
+    network::io_context_pool::Instance().unreg_object(this);
 }
 
 asio::ip::tcp::socket& Socks5Session::get_socket() {
@@ -17,6 +23,8 @@ asio::ip::tcp::socket& Socks5Session::get_socket() {
 }
 
 void Socks5Session::start(const void* probe_data, std::size_t probe_len) {
+    // 对象已构造完成，shared_from_this() 此时才有效；池停时由注册表驱动 stop()，避免存活会话阻塞排空
+    network::io_context_pool::Instance().reg_object(this, [self = shared_from_this()] { self->stop(); });
     if (!ref_handler) {
         FWARN("Socks5 Session Failed to Start : probe len {} overflow {}", probe_len, kMaxProbeLen);
         stop();
@@ -65,6 +73,11 @@ void Socks5Session::stop() {
     udp_resolver.cancel();
     socket.close(ignored_ec);
     dst_socket.close(ignored_ec);
+    // UDP 关联随 TCP 终止而结束：不关 udp_socket 则 pending receive 自持 session
+    if (udp_socket) {
+        udp_socket->cancel(ignored_ec);
+        udp_socket->close(ignored_ec);
+    }
     try {
         deadline.cancel();
     } catch (...) {
@@ -84,6 +97,7 @@ void Socks5Session::check_deadline() {
         deadline.async_wait([this, self = weak_from_this()](asio::error_code ec) {
             auto strong = self.lock();
             if (!strong) return;
+            if (ec) return; // 取消（如池停）时不得重挂
             Socks5Session::check_deadline();
         });
     }
@@ -595,11 +609,27 @@ void Socks5Session::reply_udp_associate() {
             client_buffer.resize(BUFSIZ);
 
             get_udp_client();
+            start_tcp_eof_watch();
         } else {
             FDEBUG("Client {} Closed", convert::format_address(tcp_cli_endpoint));
             stop();
         }
     });
+}
+
+void Socks5Session::start_tcp_eof_watch() {
+    auto self = shared_from_this();
+    socket.async_read_some(network_read_buffer_t(&tcp_eof_probe, 1),
+                           [this, self](asio::error_code ec, std::size_t /*length*/) {
+                               if (ec) {
+                                   
+                                   // EOF 或错误：TCP 连接结束，UDP 关联随之终止
+                                   stop();
+                                   return;
+                               }
+                               // UDP 关联期间 TCP 不应有业务数据；继续观察 EOF
+                               start_tcp_eof_watch();
+                           });
 }
 
 void Socks5Session::get_udp_client() {

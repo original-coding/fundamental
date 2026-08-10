@@ -211,7 +211,7 @@ void protocal_pipe_connection::process_socks5_proxy() {
     }
 
     auto socks5_proxy = SocksV5::socks5_proxy_imp::make_shared(
-        request_context.dst_host, port, forward_config_.socks5_username, forward_config_.socks5_proxy_port);
+        request_context.dst_host, port, forward_config_.socks5_username, forward_config_.socks5_passwd);
     auto write_callback = [this,
                            ptr = shared_from_this()](write_buffer_t write_buffers,
                                                      const network_upgrade_interface::operation_cb& finish_cb) mutable {

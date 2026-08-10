@@ -1,0 +1,21 @@
+# ADR-0001: 接口冻结 + 崩溃修复豁免
+
+- 状态：已接受（2026-08-05）
+- 背景：`docs/refactoring-plan.md`、`docs/frp-migration-plan.md`、`docs/migration-impact-analysis.md` 定稿后的网络层第二轮改造（RPC 核心 / WebSocket 转发 / SOCKS5 / protocal_pipe 四个协议任务）
+
+## 决策
+
+1. **对外暴露的接口完全冻结（冻结 A）**：公共 C++ API 的签名与语义完全不变——rpc_client 的方法（call/async_call/connect/set_connect_callback 等）、rpc_connection 的读写接口、rpc_server 的注册接口，函数签名、返回值、回调签名、类层次全部冻结。只改内部实现（私有成员、内部函数、线程模型）。
+2. **wire 协议零改动**：本轮改造不涉及协议本身——头部布局、字段顺序、编解码语义零改动；只动内部实现与错误处理路径。
+3. **崩溃修复豁免**：把可观测行为从"崩溃 / UB / 挂死"修复为"错误返回 / 正常关闭"不算违反冻结——一个会 abort 或半死挂起的接口没有可冻结的语义。成功路径行为不变，错误码枚举（如 LAST_ERROR_*）不变。
+
+## 背景（为什么这么做）
+
+- 库被多个应用/对端进程使用，公共 API 与 wire 格式都是部署环境下的契约；改造前一轮（commit 9fc79a9，FRP/RUDP/HTTP 加固）已确立"公共接口未变、内部重构"的原则，本轮延续。
+- 悬垂 `executor_`（src/rpc/connection.h:466）、大包 FASSERT abort（rpc_client.hpp:992）、read_body 半死连接（connection.cpp:313）等是确定崩溃源，不修则"完成相关问题的处理"不成立；但这些修复必然改变"崩溃时"的可观测行为，因此需要显式界定豁免范围。
+
+## 后果
+
+- 改造清单中每项必须标注性质：纯内部（可直接做）或行为修正（崩溃修复豁免范围内才允许）。
+- 测试不能断言旧崩溃行为；新用例断言修复后的正常/错误路径行为。
+- 后续任何想动公共签名或 wire 格式的提议，需新开 ADR 推翻本决策。

@@ -48,11 +48,20 @@ void io_context_pool::start() {
 #ifdef _MSC_VER
             SetThreadUILanguage(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
 #endif
-            try {
-                io_contexts_[i]->run();
-            } catch (const std::exception& e) {
-                FERR("asio context err:{}", e.what());
-                FASSERT(false, "asio context error please check your code logic,maybe some memory access error exist");
+            // io 线程不允许被异常打死：handler/回调链已逐层隔离（Signal/解析/序列化兜底），
+            // 此处仅作最后防线——记录 + 重启 run 尝试恢复，而不是 FASSERT 终止进程
+            for (;;) {
+                try {
+                    io_contexts_[i]->run();
+                    break; // 正常退出（stop 或排空）
+                } catch (const std::exception& e) {
+                    FERR("asio context err:{}", e.what());
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 防热旋
+                    try {
+                        io_contexts_[i]->restart();
+                    } catch (...) {
+                    }
+                }
             }
         });
     }

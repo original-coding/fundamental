@@ -40,6 +40,8 @@ set_target_properties(${lib_name} PROPERTIES
     FOLDER ${src_root_dir_name}
 )
 
+config_enable_sanitize_address_check(${lib_name})
+
 #target_compile_definitions(${lib_name} PUBLIC RPC_VERBOSE=1)
 #target_compile_definitions(${lib_name} PUBLIC RPC_DATA_VERBOSE=1)
 target_include_directories(${lib_name} PUBLIC
@@ -77,6 +79,7 @@ if(FUNDAMENTAL_BUILD_TESTING)
     # add test
     add_unit_test_executable(netlink_test netlink/netlink_test.cpp "" "")
     if(TARGET netlink_test)
+        config_enable_sanitize_address_check(netlink_test)
         target_link_libraries(netlink_test
             PRIVATE
             ${lib_name}

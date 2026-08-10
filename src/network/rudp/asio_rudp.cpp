@@ -1032,7 +1032,15 @@ void rudp_client_context_imp::set_status(rudp_connection_status dst_status, Fund
             // 且回调内销毁对象后不再有后续内部操作）
             request_update_rudp_status();
             auto call_cb = std::move(connected_cb);
-            if (call_cb) call_cb({});
+            if (call_cb) {
+                try {
+                    call_cb({});
+                } catch (const std::exception& e) {
+                    FERR("rudp connected callback throw:{}", e.what());
+                } catch (...) {
+                    FERR("rudp connected callback throw unknown");
+                }
+            }
         }
     } break;
     case rudp_connection_status::RUDP_CLOSED_STATUS: {
@@ -1046,11 +1054,27 @@ void rudp_client_context_imp::set_status(rudp_connection_status dst_status, Fund
                remote_id, socket_ref->remote_endpoint.address().to_string(), socket_ref->remote_endpoint.port());
         {
             auto call_cb = std::move(connected_cb);
-            if (call_cb) call_cb(ec);
+            if (call_cb) {
+                try {
+                    call_cb(ec);
+                } catch (const std::exception& e) {
+                    FERR("rudp connected callback throw:{}", e.what());
+                } catch (...) {
+                    FERR("rudp connected callback throw unknown");
+                }
+            }
         }
         {
             auto call_cb = std::move(closed_cb);
-            if (call_cb) call_cb(ec);
+            if (call_cb) {
+                try {
+                    call_cb(ec);
+                } catch (const std::exception& e) {
+                    FERR("rudp closed callback throw:{}", e.what());
+                } catch (...) {
+                    FERR("rudp closed callback throw unknown");
+                }
+            }
         }
     } break;
     default: break;

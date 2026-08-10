@@ -43,7 +43,13 @@ bool from_json(const void* data, std::size_t dataLen, T& out, const RttrDeserial
     } catch (...) {
         return false;
     }
-    return from_json_obj(json_obj, out, option);
+    try {
+        return from_json_obj(json_obj, out, option);
+    } catch (...) {
+        // RTTR 反序列化转换可能抛异常（类型不匹配等），统一视为解析失败，
+        // 不得把异常抛到 io 线程
+        return false;
+    }
 }
 
 template <typename T>
