@@ -169,7 +169,7 @@ void frp_public_server::do_accept() {
                            [this, self = shared_from_this()](asio::error_code ec, asio::ip::tcp::socket socket) {
                                if (!reference_.is_valid() || !acceptor_.is_open()) return;
                                if (!ec) {
-                                   auto session = frp_signal_session::make_shared(std::move(socket), *self);
+                                   auto session = frp_signal_session::make_shared(std::move(socket), self);
 #ifndef NETWORK_DISABLE_SSL
                                    if (ssl_context_) {
                                        session->enable_ssl(*ssl_context_);
@@ -242,8 +242,9 @@ void frp_public_server::remove_session(const std::string& uuid, const std::strin
     }
 }
 
-frp_signal_session::frp_signal_session(::asio::ip::tcp::socket&& socket, frp_public_server& owner) :
-socket_(std::move(socket)), executor_(socket_.get_executor()), owner_(owner), timeout_timer_(executor_) {
+frp_signal_session::frp_signal_session(::asio::ip::tcp::socket&& socket,
+                                       std::shared_ptr<frp_public_server> owner) :
+socket_(std::move(socket)), executor_(socket_.get_executor()), owner_(std::move(owner)), timeout_timer_(executor_) {
     enable_tcp_keep_alive(socket_);
     io_context_pool::Instance().reg_timer(timeout_timer_);
 }
@@ -276,7 +277,7 @@ void frp_signal_session::release_obj() {
     network::post_keepalive(executor_, shared_from_this(),
         [](const std::shared_ptr<frp_signal_session>& self) {
             self->timeout_timer_.cancel();
-            self->owner_.remove_session(self->uuid_, self->connection_uuid_);
+            self->owner_->remove_session(self->uuid_, self->connection_uuid_);
             if (self->release_cb_) self->release_cb_();
             self->close_socket();
         });
@@ -315,7 +316,7 @@ void frp_signal_session::do_write() {
 }
 
 void frp_signal_session::start_protocol() {
-    auto using_timeout_sec = owner_.config_.data_channel_idle_timeout_seconds / 4;
+    auto using_timeout_sec = owner_->config_.data_channel_idle_timeout_seconds / 4;
     if (using_timeout_sec < 15) using_timeout_sec = 15;
     enable_timeout(using_timeout_sec);
     read_next_command();
@@ -383,7 +384,7 @@ void frp_signal_session::process_command(std::string payload) {
         release_obj();
         return;
     }
-    enable_timeout(owner_.config_.data_channel_idle_timeout_seconds);
+    enable_timeout(owner_->config_.data_channel_idle_timeout_seconds);
     if (!authenticated_) {
         handle_server_hello_phase(base_command, std::move(payload));
         return;
@@ -444,7 +445,7 @@ void frp_signal_session::handle_server_hello_phase(const frp_command_base& comma
     FINFO("signal_session auth_request received nonce={}", server_nonce_);
     frp_auth_response_data response;
     response.command = frp_auth_response_command;
-    response.ok      = owner_.verify_auth_digest(server_nonce_, request.digest);
+    response.ok      = owner_->verify_auth_digest(server_nonce_, request.digest);
     response.message = response.ok ? "ok" : "auth failed";
     send_command(response);
     if (!response.ok) {
@@ -475,7 +476,7 @@ void frp_signal_session::handle_authenticated_phase(const frp_command_base& comm
             release_obj();
             return;
         }
-        owner_.forward_data(request.dst_uuid, std::move(request.payload));
+        owner_->forward_data(request.dst_uuid, std::move(request.payload));
         read_next_command();
         return;
     }
@@ -877,7 +878,7 @@ void frp_signal_session::handle_register_services_phase(const frp_register_servi
     frp_register_services_resp_data resp;
     resp.command = frp_register_services_resp_command;
     std::string em;
-    resp.ok      = owner_.register_client_services(*this, request, em);
+    resp.ok      = owner_->register_client_services(*this, request, em);
     resp.message = resp.ok ? "ok" : em;
     // uuid_/nat_type_/groups 已在 register_client_services 内锁内写入（P2-19：勿在锁外重复写）
     send_command(resp);
@@ -888,7 +889,7 @@ void frp_signal_session::handle_subscribe_services_phase(const frp_subscribe_ser
     frp_subscribe_services_resp_data resp;
     resp.command = frp_subscribe_services_resp_command;
     std::string em;
-    auto svcs = owner_.list_services_for_subscriber(*this, request.register_keys, em);
+    auto svcs = owner_->list_services_for_subscriber(*this, request.register_keys, em);
     if (!em.empty()) {
         resp.ok      = false;
         resp.message = em;
@@ -902,7 +903,7 @@ void frp_signal_session::handle_subscribe_services_phase(const frp_subscribe_ser
 
 void frp_signal_session::handle_channel_open_phase(const frp_channel_open_request_data& request) {
     mode_ = session_mode::data;
-    owner_.register_data_channel(*this, request);
+    owner_->register_data_channel(*this, request);
 }
 
 } // namespace network::proxy

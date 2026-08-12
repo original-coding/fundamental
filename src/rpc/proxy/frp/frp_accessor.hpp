@@ -6,6 +6,7 @@
 
 #include "network/network.hpp"
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -27,9 +28,10 @@ public:
     }
 
     explicit frp_accessor(std::shared_ptr<frp_signal_client> signal);
-    ~frp_accessor() = default;
+    ~frp_accessor();
 
     void subscribe_all_keys();
+    void send_subscribe_request();
     void on_subscribe(const std::vector<frp_visible_service_data>& services);
     void on_client_command(std::uint8_t cmd, std::string payload);
     void close();
@@ -54,6 +56,12 @@ private:
     };
 
     void reconcile_listeners(const std::vector<frp_visible_service_data>& services);
+    // 订阅快照缺服务时按 1s 间隔快速重试（上限 kMaxResubscribeAttempts 次），
+    // 之后降级为 30s 周期刷新（恢复旧版"持续探测订阅"行为）。覆盖两类场景：
+    //   1. 服务端重启后 provider 注册晚于 accessor 的订阅快照（快速路径）
+    //   2. provider 长时间离线后恢复、服务端状态漂移（周期兜底）
+    void schedule_resubscribe();
+    bool desired_services_satisfied() const;
     void start_tcp_accept_loop(const std::shared_ptr<listener_runtime>& lst);
     void start_udp_receive_loop(const std::shared_ptr<listener_runtime>& lst);
     std::string generate_connection_uuid();
@@ -68,6 +76,13 @@ private:
     std::unordered_map<std::string, std::shared_ptr<listener_runtime>> listeners_;
     std::unordered_set<std::string> last_known_services_;
     std::shared_ptr<frp_signal_client> signal_;
+    // 最近一次订阅快照（"service_name:type"，不含自己提供的服务），用于判断期望是否满足
+    std::unordered_set<std::string> visible_services_;
+    static constexpr std::uint32_t kMaxResubscribeAttempts = 10;
+    static constexpr std::chrono::seconds kResubscribeFastInterval{1};
+    static constexpr std::chrono::seconds kResubscribeRefreshInterval{30};
+    std::uint32_t resubscribe_attempts_ = 0;
+    asio::steady_timer resubscribe_timer_;
 };
 
 } // namespace network::proxy

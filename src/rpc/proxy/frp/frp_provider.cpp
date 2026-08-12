@@ -250,7 +250,15 @@ void frp_provider::start_backend_read_loop(const std::shared_ptr<relay_data_chan
 
                 if (ec) { close_data_channel(ch); return; } // 3.8: 错误收敛到关闭序列，禁止无限重挂自旋
 
-                if (n > 0) { if (ch->has_kcp()) ch->send_bytes(ch->backend_read_buf().data(), n); else if (ch->tcp()) ch->tcp()->async_write_raw(ch->backend_read_buf().data(), n); }
+                if (n > 0) {
+                    if (ch->has_kcp()) {
+                        ch->send_bytes(ch->backend_read_buf().data(), n);
+                    } else {
+                        // KCP 未就绪：缓冲，init_kcp 后统一补发（禁止裸写进 KCP 流）
+                        ch->pending_writes().emplace_back(
+                            std::make_shared<std::string>(ch->backend_read_buf().data(), n));
+                    }
+                }
 
                 if (!ch->is_closed()) start_backend_read_loop(ch);
 
@@ -268,7 +276,15 @@ void frp_provider::start_backend_read_loop(const std::shared_ptr<relay_data_chan
 
                 if (ec) { close_data_channel(ch); return; } // 3.8: 错误收敛到关闭序列，禁止无限重挂自旋
 
-                if (n > 0) { if (ch->has_kcp()) ch->send_bytes(ch->backend_read_buf().data(), n); else if (ch->tcp()) ch->tcp()->async_write_raw(ch->backend_read_buf().data(), n); }
+                if (n > 0) {
+                    if (ch->has_kcp()) {
+                        ch->send_bytes(ch->backend_read_buf().data(), n);
+                    } else {
+                        // KCP 未就绪：缓冲，init_kcp 后统一补发（禁止裸写进 KCP 流）
+                        ch->pending_writes().emplace_back(
+                            std::make_shared<std::string>(ch->backend_read_buf().data(), n));
+                    }
+                }
 
                 if (!ch->is_closed()) start_backend_read_loop(ch);
 
@@ -358,6 +374,14 @@ void frp_provider::setup_data_channel(const std::shared_ptr<relay_data_channel>&
             ch->set_traffic_secret(signal_->config().traffic_secret);
 
             ch->init_kcp();
+
+            // KCP 就绪前读到的后端数据（如 SSH banner 建连即发）已缓冲到 pending_writes，
+
+            // 在这里经 KCP 补发——裸写会污染 KCP 流，直接丢弃会让对端永远等不到数据。
+
+            for (auto& pw : ch->pending_writes()) ch->send_bytes(pw->data(), pw->size());
+
+            ch->pending_writes().clear();
 
             start_data_forward_read_loop(ch);
 

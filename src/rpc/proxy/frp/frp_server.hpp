@@ -103,7 +103,7 @@ public:
         return std::make_shared<frp_signal_session>(std::forward<Args>(args)...);
     }
 
-    frp_signal_session(::asio::ip::tcp::socket&& socket, frp_public_server& owner);
+    frp_signal_session(::asio::ip::tcp::socket&& socket, std::shared_ptr<frp_public_server> owner);
     ~frp_signal_session();
 
     void start();
@@ -170,7 +170,10 @@ private:
     network_data_reference reference_;
     ::asio::ip::tcp::socket socket_;
     const asio::any_io_executor executor_;
-    frp_public_server& owner_;
+    // 强持有 owner：session 的排队释放回调（release_obj 的 post）可能在 server 的
+    // 最后一个引用（pending accept 完成回调）销毁之后才执行，裸引用会 UAF。
+    // server 侧对 session 是 weak_ptr 持有，不会成环。
+    std::shared_ptr<frp_public_server> owner_;
     std::uint32_t timeout_sec_ = 0;
     ::asio::steady_timer timeout_timer_;
     std::deque<std::shared_ptr<std::string>> write_queue_;

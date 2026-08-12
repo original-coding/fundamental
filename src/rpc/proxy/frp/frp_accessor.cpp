@@ -19,15 +19,35 @@ std::string sha256_hex(std::string_view input) {
 namespace network::proxy
 {
 
-frp_accessor::frp_accessor(std::shared_ptr<frp_signal_client> signal) : signal_(std::move(signal)) {}
+frp_accessor::frp_accessor(std::shared_ptr<frp_signal_client> signal) :
+signal_(std::move(signal)), resubscribe_timer_(signal_->get_executor()) {
+    io_context_pool::Instance().reg_timer(resubscribe_timer_);
+}
+
+frp_accessor::~frp_accessor() {
+    io_context_pool::Instance().unreg_timer(resubscribe_timer_);
+}
 
 void frp_accessor::on_subscribe(const std::vector<frp_visible_service_data>& services) {
 
     std::unordered_set<std::string> cur;
 
-    for (const auto& svc : services)
+    visible_services_.clear();
+
+    for (const auto& svc : services) {
 
         cur.insert(Fundamental::StringFormat("{}@{}", svc.service_name, svc.provider_uuid));
+
+        // 快照键与 reconcile_listeners 的 by_name 一致，且排除自己提供的服务
+
+        if (signal_->uuid() != svc.provider_uuid) {
+
+            visible_services_.insert(Fundamental::StringFormat("{}:{}", svc.service_name,
+                                                               static_cast<int>(svc.service_type)));
+
+        }
+
+    }
 
     if (cur != last_known_services_) {
 
@@ -38,6 +58,11 @@ void frp_accessor::on_subscribe(const std::vector<frp_visible_service_data>& ser
         reconcile_listeners(services);
 
     }
+
+    // 期望服务缺失时立即收紧重试节奏，覆盖
+    // "服务端重启后 provider 注册晚于 accessor 订阅快照" 的竞态。
+
+    if (!desired_services_satisfied()) schedule_resubscribe();
 
 }
 
@@ -84,6 +109,18 @@ void frp_accessor::on_client_command(std::uint8_t cmd, std::string payload) {
 
 void frp_accessor::subscribe_all_keys() {
 
+    resubscribe_timer_.cancel();
+
+    resubscribe_attempts_ = 0; // 每次重新连接（auth ok）重置预算
+
+    send_subscribe_request();
+
+    schedule_resubscribe(); // 启动自适应刷新链（快速重试 -> 30s 周期探测）
+
+}
+
+void frp_accessor::send_subscribe_request() {
+
     frp_subscribe_services_data req;
 
     req.command = frp_subscribe_services_command;
@@ -97,6 +134,78 @@ void frp_accessor::subscribe_all_keys() {
     }
 
     if (!req.register_keys.empty()) signal_->send_command(req);
+
+}
+
+bool frp_accessor::desired_services_satisfied() const {
+
+    for (const auto& group : signal_->config().groups) {
+
+        for (const auto& lc : group.listeners) {
+
+            auto key = Fundamental::StringFormat("{}:{}", lc.service_name,
+                                                 static_cast<int>(lc.service_type));
+
+            if (!visible_services_.count(key)) return false;
+
+        }
+
+    }
+
+    return true;
+
+}
+
+void frp_accessor::schedule_resubscribe() {
+
+    resubscribe_timer_.cancel();
+
+    if (!signal_->is_reference_valid()) return;
+
+    bool has_listeners = false;
+
+    for (const auto& group : signal_->config().groups)
+
+        if (!group.listeners.empty()) { has_listeners = true; break; }
+
+    if (!has_listeners) return; // 纯 provider 无需订阅刷新
+
+    std::chrono::seconds interval = kResubscribeRefreshInterval;
+
+    if (!desired_services_satisfied()) {
+
+        if (resubscribe_attempts_ < kMaxResubscribeAttempts) {
+
+            ++resubscribe_attempts_;
+
+            interval = kResubscribeFastInterval; // 快速路径：1s 一次，最多 10 次
+
+        } else if (resubscribe_attempts_ == kMaxResubscribeAttempts) {
+
+            ++resubscribe_attempts_; // 进入降级态，只告警一次
+
+            FWARN("resubscribe fast path exhausted, fall back to {}s periodic refresh",
+                  kResubscribeRefreshInterval.count());
+
+        }
+
+    } else {
+
+        resubscribe_attempts_ = 0; // 满足时重置预算，下次变化重新获得完整快速路径
+
+    }
+
+    resubscribe_timer_.expires_after(interval);
+
+    resubscribe_timer_.async_wait([this, self = shared_from_this()](const std::error_code& ec) {
+
+        if (ec || !signal_->is_reference_valid()) return;
+
+        send_subscribe_request();
+
+        schedule_resubscribe();
+
+    });
 
 }
 
@@ -129,7 +238,25 @@ void frp_accessor::reconcile_listeners(const std::vector<frp_visible_service_dat
 
             desired.insert(key);
 
-            if (listeners_.count(key)) continue;
+            if (listeners_.count(key)) {
+                // 提供方可能已变化（provider 进程重启、新 uuid 接管同名服务）：
+                // 必须更新绑定，否则 channel_open 打到失效 uuid，server 静默丢弃 -> 永远等不到 accept。
+                auto& lst   = listeners_[key];
+                const auto& svc = it->second;
+                if (lst->provider_uuid != svc.provider_uuid ||
+                    lst->provider_enable_p2p != svc.enable_p2p ||
+                    lst->provider_nat_type != svc.provider_nat_type ||
+                    lst->provider_startup_rtt_ms != svc.provider_startup_rtt_ms) {
+                    FINFO("listener {} rebind provider {} -> {}", lst->service_name, lst->provider_uuid,
+                          svc.provider_uuid);
+                    lst->provider_uuid = svc.provider_uuid;
+                    lst->provider_enable_p2p = svc.enable_p2p;
+                    lst->provider_nat_type = svc.provider_nat_type;
+                    lst->provider_startup_rtt_ms = svc.provider_startup_rtt_ms;
+                    lst->register_key = group.register_key;
+                }
+                continue;
+            }
 
 
 
@@ -330,11 +457,10 @@ void frp_accessor::start_local_read_loop(const std::shared_ptr<relay_data_channe
 
                 } else {
 
-                    auto d = std::make_shared<std::string>(ch->read_buf().data(), n);
+                    // KCP 未就绪（本地连接早于 accept 到达）：缓冲，init_kcp 后统一经 KCP 补发。
 
-                    if (ch->tcp()) ch->tcp()->async_write_raw(d->data(), d->size());
-
-                    else ch->pending_writes().push_back(std::move(d));
+                    ch->pending_writes().emplace_back(
+                        std::make_shared<std::string>(ch->read_buf().data(), n));
 
                 }
 
@@ -484,11 +610,9 @@ void frp_accessor::start_udp_receive_loop(const std::shared_ptr<listener_runtime
 
                     ch->send_bytes(lst->udp_recv_buf.data(), n);
 
-                } else if (ch->tcp()) {
-
-                    ch->tcp()->async_write_raw(lst->udp_recv_buf.data(), n);
-
                 } else {
+
+                    // KCP 未就绪：缓冲，init_kcp 后统一经 KCP 补发（禁止裸写进 KCP 流）
 
                     ch->pending_writes().emplace_back(std::make_shared<std::string>(lst->udp_recv_buf.data(), n));
 
@@ -1024,6 +1148,8 @@ void frp_accessor::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
 
 void frp_accessor::close() {
+    resubscribe_timer_.cancel();
+    resubscribe_attempts_ = 0;
     // 先搬出再关闭：close() → on_release_ → channels_.erase 会修改容器（规范 §4.3 容器移除先于回调）
     auto channels = std::move(channels_);
     channels_.clear();

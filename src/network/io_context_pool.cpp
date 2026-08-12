@@ -200,10 +200,11 @@ void io_context_pool::drive_registered_objects() {
 
 void io_context_pool::cancel_registered_timers() {
     std::unordered_set<asio::steady_timer*> timers;
-    {
-        std::lock_guard<std::mutex> locker(timers_mutex_);
-        timers.swap(timers_);
-    }
+    // 持锁期间完成 cancel：对象的析构（unreg_timer -> 销毁定时器）会阻塞在同一把锁上，
+    // 保证 cancel 先于 per_timer_data 释放完成；否则锁外 cancel 与 io 线程销毁定时器
+    // 并发时，cancel 会打到已释放的 asio 内部状态（ASAN heap-use-after-free）。
+    std::lock_guard<std::mutex> locker(timers_mutex_);
+    timers.swap(timers_);
     for (asio::steady_timer* timer : timers) {
         timer->cancel(); // 返回取消的等待数，无需 error_code
     }

@@ -296,6 +296,12 @@ void frp_signal_channel::start() {
     if (!reference_.is_valid()) return;
     tcp_ = frp_tcp_channel::make_shared(executor_, host_, service_);
     tcp_->enable_ssl(ssl_config_);
+    // 传输死亡（读 EOF/RST、写错误）→ 立即通知断线并触发重连，不再只靠 ping/pong
+    // 超时（约 120s）兜底。weak 捕获避免 signal channel <-> tcp channel 引用环：
+    // 重连替换 signal_ 后旧通道无需显式释放即可析构。
+    tcp_->set_on_release([weak_self = std::weak_ptr<frp_signal_channel>(shared_from_this())]() {
+        if (auto self = weak_self.lock()) self->notify_disconnect_once();
+    });
     tcp_->notify_connect_result.Connect(shared_from_this(),
         [this](Fundamental::error_code ec, std::shared_ptr<frp_tcp_channel> tcp) {
             if (!reference_.is_valid()) return;
@@ -378,7 +384,9 @@ void relay_data_channel::attach_tcp(std::shared_ptr<frp_tcp_channel> tc) {
         // 服务端随之传播对端会话释放），不视为通道关闭——否则 kcp/p2p socket 被销毁，
         // 升级瞬间的在途数据丢失（ASAN 慢速下必现）。
         // 真实断链（无 punch 进行、未升级）仍走统一关闭序列。
-        if (!self->is_p2p_active() && !self->punch_engine()) self->close();
+        if (!self->is_p2p_active() && !self->punch_engine()) {
+            self->close();
+        }
     });
 }
 
@@ -508,7 +516,13 @@ void relay_data_channel::start_p2p_read_loop() {
     p2p_socket_->async_receive_from(
         asio::buffer(p2p_read_buf_.data(), p2p_read_buf_.size()), p2p_peer_endpoint_,
         [this, self](const std::error_code& ec, std::size_t n) {
-            if (ec || closed_ || !kcp_ch_) return;
+            if (closed_ || !kcp_ch_) return;
+            // UDP 接收错误（如 NAT 映射过期触发的 ICMP unreachable）是瞬态的：
+            // 必须重挂接收，否则 KCP 再无输入，keepalive 会把活链路判死（空闲 ~10-14s 断）。
+            if (ec) {
+                start_p2p_read_loop();
+                return;
+            }
             kcp_ch_->feed_encrypted(p2p_read_buf_.data(), n);
             start_p2p_read_loop();
         });

@@ -359,7 +359,12 @@ void frp_punch_engine::on_punch_success(std::uint16_t local_port, std::uint16_t 
 
     punch_result result;
     result.socket        = std::move(p2p_socket_);
-    result.peer_endpoint = asio::ip::udp::endpoint(p2p_peer_endpoint_.address(), external_peer_port);
+    // 数据面目标必须是"实际收到探测包的源端点"（p2p_peer_endpoint_，由 punch 读循环在
+    // probe match 时记录）。信号链里的 external_peer_port 是 peer 对 server 的
+    // endpoint-probe 映射：对 symmetric NAT 的 peer，该映射只对 server 有效，
+    // 对打洞目标会另建新外部端口——用它会打向错误端口，数据面单向失效，
+    // KCP keepalive 约 10-14s 后判死断链。cone-cone 场景两者等价，不受影响。
+    result.peer_endpoint = p2p_peer_endpoint_;
     result.local_port    = local_port;
     result.peer_port     = peer_port;
     FINFO("frp_punch_engine conn={} success local_port={} peer_port={} peer_endpoint={}:{}",

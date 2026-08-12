@@ -826,6 +826,8 @@ int ikcp_input(ikcpcb* kcp, const char* data, long size) {
                 ikcp_log(kcp, IKCP_LOG_IN_PROBE, "input probe");
             }
         } else if (cmd == IKCP_CMD_WINS) {
+            // WINS 只是对 WASK 的应答（见上方 WASK 分支），本身不再触发回包，
+            // 否则 A 回 B、B 回 A 会形成以 flush 频率互发的无限 ping-pong。
             // do nothing
             if (ikcp_canlog(kcp, IKCP_LOG_IN_WINS)) {
                 ikcp_log(kcp, IKCP_LOG_IN_WINS, "input wins: %lu", (unsigned long)(wnd));
@@ -1127,12 +1129,11 @@ int ikcp_update(ikcpcb* kcp, IUINT32 current) {
         kcp->ts_flush = kcp->current;
     }
 
-    // keepalive liveness detection: when no packet has arrived for one
-    // interval, reuse the existing IKCP_CMD_WINS path (ASK_TELL -> flush)
-    // as the liveness probe - the peer only updates rmt_wnd and refreshes
-    // liveness, no side effects. Unanswered probes beyond max_count judge
-    // the link dead (state = -1, same semantics as dead_link) and the
-    // return value becomes non-zero (see ikcp_update/ikcp_input).
+    // keepalive liveness detection: 空闲一个 interval 后发 WASK 探测（ASK_SEND），
+    // 对端原生 WASK 分支会回 WINS（ASK_TELL）——一问一答，探测方靠应答刷新存活；
+    // WINS 不再触发回包，因此不会形成互回循环。同时探测由入站触发应答，不受
+    // 对端"空闲才发"调度抑制（对端持续收到本端探测时其自身探测会被推迟）。
+    // 超过 max_count 个探测无任何输入则判死（state = -1），返回非零。
     if (kcp->probe_interval != 0) {
         if (_itimediff(kcp->current, kcp->ts_lastinput) >= (int)kcp->probe_interval) {
             if (kcp->probe_count + 1 > kcp->probe_max_count) {
@@ -1142,7 +1143,7 @@ int ikcp_update(ikcpcb* kcp, IUINT32 current) {
                 kcp->probe_interval = 0;
                 return -1;
             } else {
-                kcp->probe |= IKCP_ASK_TELL;  // reuse the existing WINS send path
+                kcp->probe |= IKCP_ASK_SEND;  // 发 WASK，对端回 WINS
                 kcp->ts_lastinput = kcp->current; // reset the base: next probe due one interval later
                 kcp->probe_count++;
             }

@@ -180,6 +180,9 @@ public:
     void set_error_handler(error_handler_t handler);
 
     /// 丢弃所有 pending。必须在 io 线程调用（通常在关闭序列中）。
+    /// 同时清空 keepalive/error_handler：二者常驻强引用所属对象（如 relay 自环），
+    /// 不清则 close 后对象永不析构（ASAN 泄漏）。在途 push/写完成回调各自持有副本，
+    /// 清空本 writer 成员不影响它们执行。
     void clear();
 
     std::size_t pending() const noexcept { return queue_.size(); }
@@ -249,6 +252,8 @@ inline void serialized_writer::clear()
 {
     queue_.clear();
     writing_ = false;
+    keepalive_ = {};
+    error_handler_ = {};
 }
 
 // =============================================================================

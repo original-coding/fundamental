@@ -71,19 +71,33 @@ void frp_signal_client::release_obj() {
 }
 
 void frp_signal_client::connect_signal_channel() {
+    // 替换前先释放旧通道：其 tcp 的 frame_callback_（read_next_command 的 self 捕获）
+    // 强引用旧通道，直接替换会让 旧channel <-> 旧tcp 成环泄漏（重连后首通道永不析构）。
+    // release_obj 幂等：首次传输死亡已 notify_disconnect，此处只断环不重复触发。
+    if (signal_) signal_->release_obj();
     signal_ = frp_signal_channel::make_shared(
         executor_, config_.public_server_host, std::to_string(config_.public_server_tcp_port));
     signal_->enable_ssl(to_network_config(config_.ssl));
-    signal_->set_on_connected([this] {
-        FINFO("signal connected uuid={}", uuid_);
-        reconnect_delay_seconds_ = 2;
+    // 通道可能比客户端活得久（退出释放链中 start_polling 的定时器 lambda 先释放
+    // 客户端最后一个强引用，随后通道的 queued 回调才执行），因此回调一律 weak 捕获，
+    // 避免裸 this 悬垂（ASAN: heap-use-after-free）。
+    signal_->set_on_connected([weak_self = std::weak_ptr<frp_signal_client>(shared_from_this())] {
+        if (auto self = weak_self.lock()) {
+            FINFO("signal connected uuid={}", self->uuid_);
+            self->reconnect_delay_seconds_ = 2;
+        }
     });
-    signal_->set_on_disconnected([this] {
-        FWARN("signal disconnected uuid={}", uuid_);
-        schedule_reconnect();
+    signal_->set_on_disconnected([weak_self = std::weak_ptr<frp_signal_client>(shared_from_this())] {
+        if (auto self = weak_self.lock()) {
+            FWARN("signal disconnected uuid={}", self->uuid_);
+            self->schedule_reconnect();
+        }
     });
     signal_->set_on_command(
-        [this](const frp_command_base& cmd, std::string p) { process_command(cmd, std::move(p)); });
+        [weak_self = std::weak_ptr<frp_signal_client>(shared_from_this())](const frp_command_base& cmd,
+                                                                           std::string p) {
+            if (auto self = weak_self.lock()) self->process_command(cmd, std::move(p));
+        });
     signal_->start();
 }
 
@@ -210,6 +224,10 @@ void frp_signal_client::run_nat_probe() {
         std::uint32_t rtt_ms = 0;
         std::string public_server_host;
         std::vector<std::uint16_t> udp_ports;
+        // 弱持有探测函数：在途 handler 各自持有强副本，函数不再互相/自身强引用，
+        // 完成或退出取消后自然析构（避免 do_probe <-> do_recv 自环泄漏）。
+        std::weak_ptr<std::function<void()>> probe_fn;
+        std::weak_ptr<std::function<void()>> recv_fn;
     };
 
     auto state = std::make_shared<probe_state>();
@@ -226,11 +244,14 @@ void frp_signal_client::run_nat_probe() {
 
     auto do_probe = std::make_shared<std::function<void()>>();
     auto do_recv  = std::make_shared<std::function<void()>>();
+    state->probe_fn = do_probe;
+    state->recv_fn  = do_recv;
 
-    *do_recv = [state, do_probe, do_recv, self]() mutable {
+    *do_recv = [state, self]() mutable {
         self->probe_socket_->async_receive_from(
             asio::buffer(state->recv_buf.data(), state->recv_buf.size()), state->recv_endpoint,
-            [state, do_probe, do_recv, self](const std::error_code& ec2, std::size_t bytes_read) mutable {
+            [state, self, probe = state->probe_fn.lock(), recv = state->recv_fn.lock()](const std::error_code& ec2,
+                                                                                        std::size_t bytes_read) mutable {
                 if (state->done) return;
                 if (!ec2 && bytes_read > 0) {
                     std::vector<std::uint8_t> encrypted(state->recv_buf.data(), state->recv_buf.data() + bytes_read);
@@ -265,16 +286,16 @@ void frp_signal_client::run_nat_probe() {
                                 self->run_time_sync();
                                 return;
                             }
-                            (*do_probe)();
+                            if (probe) (*probe)();
                             return;
                         }
                     }
                 }
-                if (!state->done) (*do_recv)();
+                if (!state->done && recv) (*recv)();
             });
     };
 
-    *do_probe = [state, do_probe, do_recv, self, executor]() mutable {
+    *do_probe = [state, self, executor]() mutable {
         if (state->done) return;
         if (state->attempts >= kMaxAttempts) {
             state->done = true;
@@ -306,11 +327,13 @@ void frp_signal_client::run_nat_probe() {
         self->probe_socket_->async_send_to(asio::buffer(*enc_ptr), *server_ep,
                                      [enc_ptr](const std::error_code&, std::size_t) {});
         self->probe_timer_.expires_after(std::chrono::milliseconds(200));
-        self->probe_timer_.async_wait([state, do_probe](const std::error_code& ec3) mutable {
-            if (ec3 || state->done) return;
-            (*do_probe)();
+        self->probe_timer_.async_wait([state, self, probe = state->probe_fn.lock()](const std::error_code& ec3) mutable {
+            if (ec3 || state->done || !probe) return;
+            (*probe)();
         });
-        if (state->attempts == 1) (*do_recv)();
+        if (state->attempts == 1) {
+            if (auto r = state->recv_fn.lock()) (*r)();
+        }
     };
 
     (*do_probe)();
@@ -340,6 +363,9 @@ void frp_signal_client::run_time_sync() {
         int sends_at_three = 0;
         std::array<char, 2048> recv_buf{};
         asio::ip::udp::endpoint recv_ep;
+        // 与 probe_state 同款：弱持有，在途 handler 强持有，无自环
+        std::weak_ptr<std::function<void()>> send_fn;
+        std::weak_ptr<std::function<void()>> recv_fn;
     };
 
     auto s = std::make_shared<sync_state>();
@@ -357,12 +383,14 @@ void frp_signal_client::run_time_sync() {
 
     auto do_send = std::make_shared<std::function<void()>>();
     auto do_recv  = std::make_shared<std::function<void()>>();
+    s->send_fn = do_send;
+    s->recv_fn = do_recv;
 
-    *do_recv = [s, do_recv, self]() {
+    *do_recv = [s, self]() {
         self->probe_socket_->async_receive_from(
             asio::buffer(s->recv_buf.data(), s->recv_buf.size()), s->recv_ep,
-            [s, do_recv, self](const std::error_code& ec, std::size_t bytes_read) {
-                if (ec) return;
+            [s, self, recv = s->recv_fn.lock()](const std::error_code& ec, std::size_t bytes_read) {
+                if (ec || !recv) return;
                 std::vector<std::uint8_t> encrypted(s->recv_buf.data(), s->recv_buf.data() + bytes_read);
                 auto plaintext = frp_kcp_decrypt(s->traffic_key, encrypted);
                 if (!plaintext) return;
@@ -378,11 +406,11 @@ void frp_signal_client::run_time_sync() {
                 s->samples.push_back({offset, delay});
                 if (s->samples.size() == 3 && s->sends_at_three == 0)
                     s->sends_at_three = s->sends_done;
-                (*do_recv)();
+                (*recv)();
             });
     };
 
-    *do_send = [s, do_send, self]() {
+    *do_send = [s, self]() {
         bool stop = false;
         if (s->sends_at_three > 0 && s->sends_done >= s->sends_at_three + 7) stop = true;
         if (s->sends_done >= 30) stop = true;
@@ -424,13 +452,13 @@ void frp_signal_client::run_time_sync() {
         self->probe_socket_->async_send_to(asio::buffer(*enc_ptr), s->server_ep,
             [enc_ptr](const std::error_code&, std::size_t) {});
         self->probe_timer_.expires_after(std::chrono::milliseconds(100));
-        self->probe_timer_.async_wait([do_send](const std::error_code& ec) {
-            if (!ec) (*do_send)();
+        self->probe_timer_.async_wait([s, self, send = s->send_fn.lock()](const std::error_code& ec) {
+            if (!ec && send) (*send)();
         });
     };
 
-    (*do_recv)();
-    (*do_send)();
+    if (auto r = s->recv_fn.lock()) (*r)();
+    if (auto snd = s->send_fn.lock()) (*snd)();
 }
 
 // =============================================================================
