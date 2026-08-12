@@ -120,7 +120,7 @@ target_compile_options(BuildSettings INTERFACE
     $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-Wextra>
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     >
-    $<$<CXX_COMPILER_ID:MSVC>:/wd4101;/wd4996;/wd4100>
+    $<$<CXX_COMPILER_ID:MSVC>:/utf-8;/wd4101;/wd4996;/wd4100>
 )
 
 if(F_ENABLE_COMPILE_OPTIMIZE)
