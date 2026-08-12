@@ -32,8 +32,7 @@ void frp_provider::register_all_services() {
     req.uuid = signal_->uuid();
 
     req.nat_type = (signal_->config().nat_type != frp_nat_type_disabled && signal_->probed_nat_type() != frp_nat_type_disabled)
-
-                       ? signal_->probed_nat_type() : frp_nat_type_disabled;
+                       ? signal_->probed_nat_type() : static_cast<std::uint8_t>(frp_nat_type_disabled);
 
     req.startup_rtt_ms = signal_->startup_rtt_ms();
 
@@ -539,7 +538,7 @@ void frp_provider::handle_p2p_message(std::uint8_t cmd, std::string payload) {
 
             });
 
-            engine->set_on_probe_match([this, self, ch](std::uint16_t local_port, std::uint16_t peer_port,
+            engine->set_on_probe_match([self, ch](std::uint16_t local_port, std::uint16_t peer_port,
 
                                                           std::uint16_t target_port, std::uint16_t peer_external_port) {
 
@@ -551,7 +550,7 @@ void frp_provider::handle_p2p_message(std::uint8_t cmd, std::string payload) {
 
             });
 
-            engine->set_on_success([this, self, ch](frp_punch_engine::punch_result result) {
+            engine->set_on_success([self, ch](frp_punch_engine::punch_result result) {
 
                 FINFO("p2p success conn={} local_port={} peer_port={}",
 
@@ -565,7 +564,7 @@ void frp_provider::handle_p2p_message(std::uint8_t cmd, std::string payload) {
 
             });
 
-            engine->set_on_failed([this, self, ch] {
+            engine->set_on_failed([self, ch] {
 
                 FWARN("p2p failed conn={}", ch->connection_uuid());
 
@@ -583,7 +582,7 @@ void frp_provider::handle_p2p_message(std::uint8_t cmd, std::string payload) {
 
             ch->handshake_timer().expires_after(std::chrono::seconds(30));
 
-            ch->handshake_timer().async_wait([this, self, ch](const std::error_code& ec) {
+            ch->handshake_timer().async_wait([self, ch](const std::error_code& ec) {
 
                 if (ec || ch->is_closed() || ch->is_p2p_active()) return;
 
@@ -882,7 +881,7 @@ void frp_provider::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
     auto engine = frp_punch_engine::create(std::move(pcfg), signal_sender);
 
-    engine->set_on_endpoint_ready([this, self, ch](std::string ip, std::uint16_t port) {
+    engine->set_on_endpoint_ready([self, ch](std::string ip, std::uint16_t port) {
 
         ch->my_external_ip() = ip;
 
@@ -892,7 +891,7 @@ void frp_provider::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
     });
 
-    engine->set_on_probe_match([this, self, ch](std::uint16_t local_port, std::uint16_t peer_port,
+    engine->set_on_probe_match([self, ch](std::uint16_t local_port, std::uint16_t peer_port,
 
                                                   std::uint16_t target_port, std::uint16_t peer_external_port) {
 
@@ -906,7 +905,7 @@ void frp_provider::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
     });
 
-    engine->set_on_success([this, self, ch](frp_punch_engine::punch_result result) {
+    engine->set_on_success([self, ch](frp_punch_engine::punch_result result) {
 
         FINFO("p2p success conn={} local_port={} peer_port={} peer={}:{}",
 
@@ -922,7 +921,7 @@ void frp_provider::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
     });
 
-    engine->set_on_failed([this, self, ch] {
+    engine->set_on_failed([self, ch] {
 
         FWARN("p2p failed conn={}", ch->connection_uuid());
 
@@ -940,7 +939,7 @@ void frp_provider::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
     ch->handshake_timer().expires_after(std::chrono::seconds(30));
 
-    ch->handshake_timer().async_wait([this, self, ch](const std::error_code& ec) {
+    ch->handshake_timer().async_wait([self, ch](const std::error_code& ec) {
 
         if (ec || ch->is_closed() || ch->is_p2p_active()) return;
 

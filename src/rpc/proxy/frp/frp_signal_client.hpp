@@ -15,6 +15,19 @@
 namespace network::proxy
 {
 
+namespace detail
+{
+
+// 延迟到实例化点才要求 Channel 完整：frp_signal_client 只前向声明
+// frp_signal_channel，而 send_command 是模板成员，直接调用会在模板定义处
+// 触发 "invalid use of incomplete type" 警告。
+template <typename Channel, typename CommandData>
+void forward_send_command(const std::shared_ptr<Channel>& channel, const CommandData& data) {
+    channel->send_command(data);
+}
+
+} // namespace detail
+
 class frp_signal_client : public std::enable_shared_from_this<frp_signal_client>,
                            private asio::noncopyable {
 public:
@@ -39,7 +52,7 @@ public:
 
     template <typename CommandData>
     void send_command(const CommandData& data) {
-        if (signal_) signal_->send_command(data);
+        if (signal_) detail::forward_send_command(signal_, data);
     }
 
     void send_p2p_command(const std::string& peer_uuid, std::string json_payload);

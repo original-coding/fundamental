@@ -448,8 +448,12 @@ LoggerStream::~LoggerStream() {
 #endif
 }
 #if ENABLE_FUNDAMENTAL_ASSERT_MACRO
+    #if !defined(__clang__)
     #pragma message("fundamental assert macro was enabled")
+    #endif
 #else
+    #if !defined(__clang__)
     #pragma message("fundamental assert macro was disabled")
+    #endif
 #endif
 } // namespace Fundamental

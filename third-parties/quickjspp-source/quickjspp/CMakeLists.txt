@@ -2,10 +2,10 @@ cmake_minimum_required(VERSION 3.13)
 project(quickjspp LANGUAGES CXX)
 
 #set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-
-if(CMAKE_COMPILER_IS_GNUCC)
-    add_compile_options(-Wall -Wno-unused-parameter)
+# quickjs 的 LTO 只在 Release + 非 clang 下开启：clang 需要 lld/LLVMgold 插件
+# 才能链接 LLVM bitcode，环境不保证可用；调试/RelWithDebInfo 构建也不需要。
+if(CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
 add_subdirectory(quickjs)

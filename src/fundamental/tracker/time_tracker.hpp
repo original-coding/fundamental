@@ -113,9 +113,13 @@ template <typename ChronoTimeType_ = std::chrono::milliseconds>
 using STimeTracker = TimeTracker<ChronoTimeType_, std::string>;
 } // namespace Fundamental
 #if (defined(DEBUG) && !defined(NDEBUG))
+    #if !defined(__clang__)
     #pragma message("#####################ENABLE TIME TRACKER FOR DEBUG MODE####################")
+    #endif
 #elif defined(FORCE_TIME_TRACKER)
+    #if !defined(__clang__)
     #pragma message("#####################FORCE TIME TRACKER ####################")
+    #endif
 #endif
 
 #if (defined(DEBUG) && !defined(NDEBUG)) || defined(FORCE_TIME_TRACKER)

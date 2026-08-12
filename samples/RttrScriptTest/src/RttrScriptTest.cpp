@@ -118,7 +118,7 @@ public:
     }
     class_base() = default;
     class_base(std::int32_t v) : base_object { v } {};
-    class_base(std::int32_t v1, std::int32_t v2) : base_object { { v2 + v1 } } {
+    class_base(std::int32_t v1, std::int32_t v2) : base_object { v2 + v1 } {
         std::cout << v1 << " + " << v2 << std::endl;
     };
     class_base(std::string v) : base_object { std::stoi(v) } {};

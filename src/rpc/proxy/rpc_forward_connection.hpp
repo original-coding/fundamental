@@ -12,6 +12,7 @@ namespace proxy
 {
 
 struct proxy_upstream_interface {
+    virtual ~proxy_upstream_interface() = default;
     virtual void async_buffers_read(network_read_buffers_t buffers, network_io_handler_t handler)        = 0;
     virtual void async_buffers_read_some(network_read_buffers_t buffers, network_io_handler_t handler)   = 0;
     virtual void async_buffers_write(network_write_buffers_t buffers, network_io_handler_t handler)      = 0;

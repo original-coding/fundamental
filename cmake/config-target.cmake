@@ -196,9 +196,10 @@ endif()
 #add optimize config
 
 target_compile_options(BuildSettings INTERFACE
-    # LTO 编译选项（-flto 或 /GL）
+    # LTO 编译选项（-flto 或 /GL）。Clang 下 LTO 需要 lld/LLVMgold 插件，
+    # 环境不保证可用，因此仅 GNU 编译器在 Release 模式启用 LTO。
     $<$<CONFIG:Release>:
-    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-flto=auto>
+    $<$<CXX_COMPILER_ID:GNU>:-flto=auto>
     $<$<CXX_COMPILER_ID:MSVC>:/GL>
     >
     # GCC/Clang 分节选项（为 --gc-sections 做准备）
@@ -217,9 +218,9 @@ target_compile_options(BuildSettings INTERFACE
 
 
 target_link_options(BuildSettings INTERFACE
-    # LTO 链接选项（-flto 或 /LTCG）
+    # LTO 链接选项（-flto 或 /LTCG）。与编译选项一致：仅 GNU + Release。
     $<$<CONFIG:Release>:
-    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-flto=auto>
+    $<$<CXX_COMPILER_ID:GNU>:-flto=auto>
     $<$<CXX_COMPILER_ID:MSVC>:/LTCG>
     >
     # 无用代码剥离（--gc-sections 或 /OPT:REF）

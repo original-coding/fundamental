@@ -1,8 +1,8 @@
-// kcp keepalive (IKCP_CMD_PING) liveness detection tests.
+// kcp keepalive liveness detection tests.
 //
 // Covers: probe trigger on idle, growing probe interval, reset on any
 // inbound packet, probe-count reset, dead judgement (state = -1 + on_dead),
-// interval=0 disabled, inbound PING handling, unknown command tolerance,
+// interval=0 disabled, inbound probe handling, unknown command tolerance,
 // symmetric two-way keepalive, and 32-bit timestamp wraparound.
 //
 // Time is driven manually through ikcp_update(kcp, current) so every
@@ -20,7 +20,9 @@ namespace
 {
 
 constexpr IUINT32 kConv    = 0x12345678;
-constexpr std::uint8_t kWinsCmd = 84; // IKCP_CMD_WINS (probe reuses the window-tell command)
+// The liveness probe is an IKCP_CMD_WASK frame (idle -> ask, peer answers
+// with WINS), matching the question/answer design in ikcp_update.
+constexpr std::uint8_t kProbeCmd = 83; // IKCP_CMD_WASK
 
 // ---------------------------------------------------------------------------
 // Packet helpers
@@ -60,7 +62,9 @@ public:
 
         ikcp_update(a_, now);
         b_->current = now;
-        if (delay_a_to_b_ > 0) {
+        if (drop_a_to_b_) {
+            out_a_.clear(); // A's frames never reach B (simulated death)
+        } else if (delay_a_to_b_ > 0) {
             for (auto& pkt : out_a_) inflight_a_to_b_.push_back({pkt, now + (IUINT32)delay_a_to_b_});
         } else {
             for (auto& pkt : out_a_) ikcp_input(b_, pkt.data(), (long)pkt.size());
@@ -103,6 +107,7 @@ public:
     }
 
     bool drop_b_to_a_ = false;
+    bool drop_a_to_b_ = false;
     int delay_a_to_b_ = 0;
     int delay_b_to_a_ = 0;
     std::vector<inflight> inflight_a_to_b_;
@@ -113,9 +118,11 @@ public:
 
     // Network simulation knobs (applied at the output boundary):
     // - drop_b_to_a(): B's frames never reach A - simulates B dying silently
+    // - drop_a_to_b(): A's frames never reach B - simulates A's replies lost
     // - set_delay_a_to_b(ms): A's frames arrive at B after `ms` (in-flight
     //   delay, like a real network) - breaks the zero-latency sync artifact
     void drop_b_to_a(bool on) { drop_b_to_a_ = on; }
+    void drop_a_to_b(bool on) { drop_a_to_b_ = on; }
     void set_delay_a_to_b(int ms) { delay_a_to_b_ = ms; }
     void set_delay_b_to_a(int ms) { delay_b_to_a_ = ms; }
 
@@ -143,7 +150,7 @@ private:
         auto* self   = static_cast<KcpPair*>(user);
         auto& target = (kcp == self->a_) ? self->out_a_ : self->out_b_;
         target.emplace_back(buf, buf + len);
-        if (len >= 5 && static_cast<unsigned char>(buf[4]) == kWinsCmd) {
+        if (len >= 5 && static_cast<unsigned char>(buf[4]) == kProbeCmd) {
             (kcp == self->a_ ? self->a_ping_seen_ : self->b_ping_seen_) = true;
         }
         return 0;
@@ -220,6 +227,9 @@ TEST(kcp_keepalive_test, inbound_packet_resets_probe_count_ordered) {
 TEST(kcp_keepalive_test, dead_after_max_unanswered_probes) {
     KcpPair p;
     ikcp_enable_keepalive(p.a(), 5000, 2);
+    // B never answers: its WINS replies are dropped, so A's WASK probes
+    // go unanswered (same one-directional failure as peer_abnormal_*).
+    p.drop_b_to_a(true);
 
     p.advance_to(0);
     p.advance_to(5000);
@@ -249,23 +259,25 @@ TEST(kcp_keepalive_test, disabled_by_default) {
     EXPECT_EQ(p.a()->state, (IUINT32)0);
 }
 
-// 7. An inbound WINS probe refreshes liveness like any other packet:
-//    B enables keepalive with a shorter interval, so its real probe (a WINS
-//    segment produced by ikcp itself) reaches A at t=2000.
-TEST(kcp_keepalive_test, inbound_wins_refreshes_liveness) {
+// 7. An inbound WASK probe refreshes liveness like any other packet:
+//    B enables keepalive with a shorter interval, so its real probe (a WASK
+//    segment produced by ikcp itself) reaches A at t=2000. A's WINS reply is
+//    dropped so B never sees any input, stops probing after max_count, and
+//    A's clock stays anchored at t=2000 (the inbound probe).
+TEST(kcp_keepalive_test, inbound_probe_refreshes_liveness) {
     KcpPair p;
     ikcp_enable_keepalive(p.a(), 5000, 3);
-    // B probes once (max=1) at t=2000 then stops: a single real WINS frame
-    // reaches A and refreshes its liveness clock
+    // B probes once (max=1) at t=2000: a single real WASK frame reaches A
     ikcp_enable_keepalive(p.b(), 2000, 1);
+    p.drop_a_to_b(true); // A's WINS reply is lost -> B stops after max_count
 
     p.advance_to(0);
     p.advance_to(1999);
     EXPECT_FALSE(p.a_sent_ping()) << "A idle, probe due at 5000";
 
-    p.advance_to(2000); // B's WINS probe arrives at A
+    p.advance_to(2000); // B's WASK probe arrives at A
     p.advance_to(5000);
-    EXPECT_FALSE(p.a_sent_ping()) << "A's clock refreshed by B's WINS at 2000";
+    EXPECT_FALSE(p.a_sent_ping()) << "A's clock refreshed by B's probe at 2000";
 
     p.advance_to(7000);
     EXPECT_TRUE(p.a_sent_ping()) << "A probes at 2000+5000";

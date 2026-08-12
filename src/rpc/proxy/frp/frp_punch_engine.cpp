@@ -66,7 +66,6 @@ frp_punch_engine::frp_punch_engine(config cfg, signal_sender sender)
       public_server_udp_port_(cfg.public_server_udp_port),
       my_nat_type_(cfg.my_nat_type),
       my_rtt_ms_(cfg.my_rtt_ms),
-      punch_seq_(cfg.punch_seq),
       signal_sender_(std::move(sender)),
       endpoint_probe_timer_(executor_),
       deadline_timer_(executor_),

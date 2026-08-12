@@ -120,7 +120,6 @@ private:
     const std::uint16_t public_server_udp_port_;
     const std::uint8_t my_nat_type_;
     std::uint32_t my_rtt_ms_ = 100;
-    std::uint32_t punch_seq_ = 0;
     std::uint32_t punch_tag_ = 0;
 
     signal_sender signal_sender_;

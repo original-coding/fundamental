@@ -16,28 +16,6 @@ namespace network::proxy
 namespace
 {
 
-std::string sha256_hex(std::string_view input) {
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256(reinterpret_cast<const unsigned char*>(input.data()), input.size(), hash);
-    return Fundamental::Utils::BufferToHex(hash, SHA256_DIGEST_LENGTH);
-}
-
-std::optional<asio::ip::udp::endpoint> resolve_udp_endpoint(const asio::any_io_executor& executor,
-                                                            const std::string& host, std::uint16_t port) {
-    std::error_code ec;
-    auto addr = asio::ip::make_address(host, ec);
-    if (!ec) {
-        if (addr.is_v6()) return std::nullopt;
-        return asio::ip::udp::endpoint(addr, port);
-    }
-    asio::ip::udp::resolver resolver(executor);
-    auto eps = resolver.resolve(asio::ip::udp::v4(), host, std::to_string(port), ec);
-    if (ec) return std::nullopt;
-    auto it = eps.begin();
-    if (it == eps.end()) return std::nullopt;
-    return it->endpoint();
-}
-
 } // namespace
 
 // =============================================================================
@@ -350,7 +328,7 @@ void frp_signal_channel::notify_disconnect_once() {
 relay_data_channel::relay_data_channel(const asio::any_io_executor& ex,
                                        std::string conn_id, std::string peer) :
 connection_uuid_(std::move(conn_id)), peer_uuid_(std::move(peer)), executor_(ex),
-backend_socket_(ex), local_socket_(ex), idle_timer_(ex), handshake_timer_(ex) {
+idle_timer_(ex), handshake_timer_(ex), backend_socket_(ex), local_socket_(ex) {
     io_context_pool::Instance().reg_timer(idle_timer_);
     io_context_pool::Instance().reg_timer(handshake_timer_);
 }
@@ -546,8 +524,6 @@ void frp_unified_client::start() {
     for (const auto& group : signal_->config().groups) {
         for (const auto& svc : group.services)
             provider_->set_service_map({{group.register_key, {{svc.service_name, svc}}}});
-        for (const auto& svc : group.services)
-            ; // service map set above
     }
     // Populate provider service map properly
     std::unordered_map<std::string, std::unordered_map<std::string, frp_provider_service_config>> smap;

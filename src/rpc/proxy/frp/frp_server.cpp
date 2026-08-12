@@ -775,7 +775,7 @@ void frp_public_server::register_data_channel(frp_signal_session& session,
                     strong->send_raw(data, len);
                     return true;
                 },
-                [uuid_group = dst_session->uuid_, connection_id, this, ptr = weak_from_this()]() {
+                [uuid_group = dst_session->uuid_, connection_id, ptr = weak_from_this()]() {
                     auto strong = ptr.lock();
                     if (!strong) return;
                     strong->remove_session(uuid_group, connection_id);

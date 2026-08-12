@@ -326,7 +326,6 @@ DelayQueue& DelayQueue::GlobalInstance() {
     static bool loop_flag = true;
     static DelayQueue instance;
     static std::once_flag init_flag;
-    static std::atomic_bool sync_flag = false;
     static std::mutex s_mutex;
     static std::condition_variable s_cv;
 

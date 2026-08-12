@@ -72,6 +72,7 @@ struct comment_data {
     std::vector<std::string> comments;
 };
 struct js_visitor_module_data {
+    virtual ~js_visitor_module_data() = default;
     void final_submit(js_module_t module_ref, const char* class_name) {
         do_finish_submit(module_ref, class_name);
     }
@@ -204,13 +205,13 @@ struct js_visitor_module_data_storage : js_visitor_module_data {
         base_list.clear();
         for (auto& item : ctor_list) {
             item(ref_class);
-            Value& ctor = ref_class.template get_internal_ctor();
+            Value& ctor = ref_class.get_internal_ctor();
             for (auto& item : static_proto_list) {
                 item.second(ctor);
             }
         }
         ctor_list.clear();
-        Value& prototype = ref_class.template get_internal_prototype();
+        Value& prototype = ref_class.get_internal_prototype();
 
         for (auto& item : proto_list) {
             item.second(prototype);

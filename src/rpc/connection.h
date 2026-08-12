@@ -323,7 +323,7 @@ private:
     void process_ws_request(std::size_t preread_len = 0);
     void process_pipe_connection(std::size_t preread_len = 0);
     void process_socks5_proxy(const void* preread_data, std::size_t len);
-    void probe_protocal(std::size_t offset = 0, std::size_t target_probe_size = kProbeReadSize);
+    void probe_protocal(std::size_t offset = 0, std::size_t target_probe_size = kProbeReadSize) override;
     void read_rpc_head(std::size_t offset = 0);
 
     void read_body(uint32_t func_id, std::size_t size, std::size_t start_offset = 0);

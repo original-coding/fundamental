@@ -184,7 +184,6 @@ int main(int argc, char* argv[]) {
         }
         auto acceptor                 = std::make_shared<rudp_acceptor>(server_handler);
         acceptor->max_size            = max_connections;
-        std::atomic<std::int32_t> cnt = 0;
         acceptor->start([](rudp_handle_t handle) { rudp_server_session::start_new_session(handle); });
         network::io_context_pool::Instance().notify_sys_signal.Connect(
             [&, server_handler](Fundamental::error_code, int) {

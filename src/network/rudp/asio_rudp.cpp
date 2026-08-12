@@ -518,7 +518,7 @@ struct rudp_socket : public std::enable_shared_from_this<rudp_socket> {
         Fundamental::error_code ec;
         socket.release(ec);
         if (ec) return;
-        socket = std::move(asio::ip::udp::socket(ios, protocal, native_sock));
+        socket = asio::ip::udp::socket(ios, protocal, native_sock);
         client_context->accept_assign_executor(ios);
 #endif // !_WIN32
     }
@@ -1242,8 +1242,8 @@ void rudp_client_context_imp::accept_assign_executor(asio::io_context& new_execu
     io_context_pool::Instance().unreg_timer(status_timer);
     update_timer.cancel();
     status_timer.cancel();
-    update_timer = std::move(asio::steady_timer(new_executor));
-    status_timer = std::move(asio::steady_timer(new_executor));
+    update_timer = asio::steady_timer(new_executor);
+    status_timer = asio::steady_timer(new_executor);
     io_context_pool::Instance().reg_timer(update_timer);
     io_context_pool::Instance().reg_timer(status_timer);
     // update token to avoid call perform_read twice

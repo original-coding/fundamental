@@ -8,11 +8,6 @@
 
 namespace network::proxy {
 namespace {
-std::string sha256_hex(std::string_view input) {
-  unsigned char hash[SHA256_DIGEST_LENGTH];
-  SHA256(reinterpret_cast<const unsigned char*>(input.data()), input.size(), hash);
-  return Fundamental::Utils::BufferToHex(hash, SHA256_DIGEST_LENGTH);
-}
 
 std::optional<asio::ip::udp::endpoint> resolve_udp_endpoint(
     const asio::any_io_executor& ex, const std::string& host, std::uint16_t port) {

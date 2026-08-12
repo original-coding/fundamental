@@ -388,7 +388,7 @@ http_response::response_type http_response::get_status() const {
 }
 
 void http_response::perform_response(bool from_async_cb) {
-    asio::post(http_con_ref.socket_.get_executor(), [this, from_async_cb, ref = http_con_ref.shared_from_this()]() {
+    asio::post(http_con_ref.socket_.get_executor(), [this, ref = http_con_ref.shared_from_this()]() {
         auto current_status = response_pack_status.load();
         if (!(current_status & http_response_status_mask::http_response_all_headeres_set)) {
             FDEBUG("post http_connection {:p} ignore when response headeres has not set up", (void*)this);

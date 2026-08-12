@@ -1551,7 +1551,7 @@ TEST(rpc_test, test_sync_message) {
     std::string sync_data = Fundamental::StringFormat("test sync {}", test_cnt);
     std::string test_key  = "sync_data_key";
     for (std::size_t index = 0; index < test_cnt; ++index) {
-        test_threads.emplace_back(std::thread([index = index, test_key, sync_data]() {
+        test_threads.emplace_back(std::thread([test_key, sync_data]() {
             auto client = network::make_guard<rpc_client>();
             client->enable_timeout_check();
             bool r = client->connect("127.0.0.1", "9000");
@@ -1637,7 +1637,7 @@ TEST(rpc_test, test_reconnect_after_server_kill) {
             }
         }
         EXPECT_TRUE(echo_ok);
-        client->async_call("auto_disconnect", i); // 服务端释放连接，不等待其响应
+        (void)client->async_call("auto_disconnect", i); // 服务端释放连接，不等待其响应
         bool reconnected = false;
         for (int w = 0; w < 300; ++w) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
