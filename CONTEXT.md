@@ -16,3 +16,12 @@
 - **测试载体**：某协议测试所归属的测试可执行。RPC 核心 / WebSocket 转发 / SOCKS5 共用 TestRpc；netlink 用其独立 netlink_test；protocal_pipe 用独立新建测试。
 - **审计发现**：按 `docs/asio-async-standards.md` §10 清单扫描后的具体问题，落到 `file:line`，记录为 `.scratch/<task>/issues/` 下的 ticket。
 - **验收标准**：一个协议任务完成的定义——相关测试全绿（未被测试覆盖的改造必须新建用例）、release 构建通过、ASAN 无内存错误/泄漏、测试进程退出不挂死。
+
+## P2P 打洞
+
+- **均衡打洞**：sym 侧源端口数与 cone 侧目的端口数取相近值，使最坏情况下单轮命中概率（由 S×P 决定）最大化。
+  _Avoid_: 平衡打洞
+- **泛洪限速**：打洞探测包分批发送（每批几十个）而非一次性突发，避免被 NAT/出口识别为 UDP 洪泛。
+  _Avoid_: 限流、节流
+- **连续端口块**：sym 侧为应对按序分配端口的对称 NAT 而打开的一段连续本地源端口。
+  _Avoid_: 端口段、端口区间

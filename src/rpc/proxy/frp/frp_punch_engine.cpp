@@ -21,11 +21,13 @@ namespace
 static constexpr std::size_t kMaxEndpointProbeAttempts = 50;
 static constexpr int kEndpointProbeIntervalMs       = 100;
 static constexpr int kPunchMaxRounds          = 1;
-static constexpr int kPunchSocketCount        = 65;
-static constexpr int kPunchRetransmitCount     = 5;
+static constexpr int kPunchSocketCount        = 550;
+static constexpr int kPunchRetransmitCount     = 4;
 static constexpr int kPunchPortMin             = 512;
 static constexpr int kPunchPortMax             = 65535;
-static constexpr int kConeProbePortCount      = 3000;
+static constexpr int kConeProbePortCount      = 550;
+static constexpr int kPunchBatchSize           = 55;
+static constexpr int kPunchBatchIntervalMs     = 500;
 
 std::vector<std::uint16_t> build_cone_port_pool() {
     constexpr auto count = kPunchPortMax - kPunchPortMin + 1;
@@ -531,32 +533,45 @@ void frp_punch_engine::rebuild_symmetric_sockets()
         }
     }
 
-    // 2) 64 spread-random ports
+    // 2) Contiguous ports around the base socket (kPunchSocketCount total, base included).
     {
-        constexpr int kSpreadPorts = kPunchSocketCount - 1;
-        const std::uint32_t total_range =
-            static_cast<std::uint32_t>(kPunchPortMax - kPunchPortMin + 1);
-        const int seg_size = static_cast<int>(total_range / static_cast<std::uint32_t>(kSpreadPorts));
-
-        for (int i = 0; i < kSpreadPorts; i++) {
-            int seg_start = static_cast<int>(kPunchPortMin + i * seg_size);
-            int seg_end = (i == kSpreadPorts - 1) ? kPunchPortMax : seg_start + seg_size - 1;
-            if (seg_start < static_cast<int>(xxx) && static_cast<int>(xxx) <= seg_end) {
-                continue;
-            }
-            std::uniform_int_distribution<int> port_dist(seg_start, seg_end);
-            for (int attempt = 0; attempt < 30; attempt++) {
-                auto port = static_cast<std::uint16_t>(port_dist(rng));
-                if (scanned_ports.count(port)) continue;
+        const int target_count = static_cast<int>(kPunchSocketCount);
+        const int port_span = static_cast<int>(kPunchPortMax) - static_cast<int>(kPunchPortMin) + 1;
+        for (int delta = 1;
+             static_cast<int>(punch_sockets_.size()) < target_count && delta <= port_span; ++delta) {
+            for (int sign = -1; sign <= 1; sign += 2) {
+                if (static_cast<int>(punch_sockets_.size()) >= target_count) break;
+                int port = static_cast<int>(xxx) + sign * delta;
+                if (port < static_cast<int>(kPunchPortMin) || port > static_cast<int>(kPunchPortMax)) {
+                    continue;
+                }
+                auto p16 = static_cast<std::uint16_t>(port);
+                if (scanned_ports.count(p16)) continue;
                 auto sock = std::make_shared<asio::ip::udp::socket>(executor_);
                 sock->open(asio::ip::udp::v4(), ec);
                 if (ec) continue;
-                sock->bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), port), ec);
+                sock->bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), p16), ec);
                 if (!ec) {
                     punch_sockets_.push_back(std::move(sock));
-                    scanned_ports.insert(port);
-                    break;
+                    scanned_ports.insert(p16);
                 }
+            }
+        }
+
+        // Fallback: fill any remaining ports from the full range (bounded).
+        std::uniform_int_distribution<int> port_dist(kPunchPortMin, kPunchPortMax);
+        int fallback_attempts = 0;
+        while (static_cast<int>(punch_sockets_.size()) < target_count && fallback_attempts < 10000) {
+            ++fallback_attempts;
+            auto port = static_cast<std::uint16_t>(port_dist(rng));
+            if (scanned_ports.count(port)) continue;
+            auto sock = std::make_shared<asio::ip::udp::socket>(executor_);
+            sock->open(asio::ip::udp::v4(), ec);
+            if (ec) continue;
+            sock->bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), port), ec);
+            if (!ec) {
+                punch_sockets_.push_back(std::move(sock));
+                scanned_ports.insert(port);
             }
         }
     }
@@ -669,26 +684,27 @@ void frp_punch_engine::do_punch_round()
     }
 
     auto retransmit_index = std::make_shared<int>(0);
-    auto do_retransmit = std::make_shared<std::function<void()>>();
-    std::weak_ptr<std::function<void()>> w_retransmit = do_retransmit;
-    *do_retransmit = [this, self = shared_from_this(), w_retransmit, retransmit_index,
-                      targets = std::move(targets), i_am_symmetric]() mutable {
+    auto batch_cursor    = std::make_shared<std::size_t>(0);
+    auto do_send_batch   = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> w_send_batch = do_send_batch;
+    *do_send_batch = [this, self = shared_from_this(), w_send_batch, retransmit_index,
+                      batch_cursor, targets = std::move(targets), i_am_symmetric]() mutable {
         if (!reference_.is_valid() || !punch_active_ || punch_done_ || result_delivered_) return;
         if (*retransmit_index >= kPunchRetransmitCount) {
             punch_round_++;
             do_punch_round();
             return;
         }
-        (*retransmit_index)++;
 
         auto tag = punch_tag_;
+
         if (!targets.empty() && i_am_symmetric) {
-            std::vector<std::shared_ptr<asio::ip::udp::socket>> socks;
-            for (auto& sock : punch_sockets_) {
-                if (sock) socks.push_back(sock);
-            }
-            std::shuffle(socks.begin(), socks.end(), std::mt19937(std::random_device{}()));
-            for (auto& sock : socks) {
+            std::size_t sent = 0;
+            while (sent < static_cast<std::size_t>(kPunchBatchSize) &&
+                   *batch_cursor < punch_sockets_.size()) {
+                auto& sock = punch_sockets_[*batch_cursor];
+                ++(*batch_cursor);
+                if (!sock) continue;
                 std::error_code ec;
                 std::uint16_t lp = sock->local_endpoint(ec).port();
                 if (ec) continue;
@@ -699,11 +715,22 @@ void frp_punch_engine::do_punch_round()
                 std::memcpy(pkt->data() + 6, &tgt_port, 2);
                 sock->async_send_to(asio::buffer(*pkt), targets[0],
                                     [pkt](const std::error_code&, std::size_t) {});
+                ++sent;
+            }
+            if (*batch_cursor >= punch_sockets_.size()) {
+                *batch_cursor = 0;
+                ++(*retransmit_index);
+                std::shuffle(punch_sockets_.begin(), punch_sockets_.end(),
+                             std::mt19937(std::random_device{}()));
             }
         } else if (!targets.empty()) {
             std::uint16_t lp = 0;
             { std::error_code ec; lp = p2p_socket_->local_endpoint(ec).port(); }
-            for (const auto& tgt : targets) {
+            std::size_t sent = 0;
+            while (sent < static_cast<std::size_t>(kPunchBatchSize) &&
+                   *batch_cursor < targets.size()) {
+                const auto& tgt = targets[*batch_cursor];
+                ++(*batch_cursor);
                 std::uint16_t tgt_port = tgt.port();
                 auto pkt = std::make_shared<std::array<std::uint8_t, 8>>();
                 std::memcpy(pkt->data(), &tag, 4);
@@ -711,21 +738,25 @@ void frp_punch_engine::do_punch_round()
                 std::memcpy(pkt->data() + 6, &tgt_port, 2);
                 p2p_socket_->async_send_to(asio::buffer(*pkt), tgt,
                                            [pkt](const std::error_code&, std::size_t) {});
+                ++sent;
+            }
+            if (*batch_cursor >= targets.size()) {
+                *batch_cursor = 0;
+                ++(*retransmit_index);
+                std::shuffle(targets.begin(), targets.end(),
+                             std::mt19937(std::random_device{}()));
             }
         }
 
-        auto interval_ms = static_cast<int>((my_rtt_ms_ + peer_rtt_ms_) * 3);
-        if (interval_ms < 1000) interval_ms = 1000;
-        if (interval_ms > 10000) interval_ms = 10000;
-        punch_timer_.expires_after(std::chrono::milliseconds(interval_ms));
-        auto retransmit_ref = w_retransmit.lock();
-        if (!retransmit_ref) return;
-        punch_timer_.async_wait([retransmit_ref](const std::error_code& ec) {
+        punch_timer_.expires_after(std::chrono::milliseconds(kPunchBatchIntervalMs));
+        auto send_batch_ref = w_send_batch.lock();
+        if (!send_batch_ref) return;
+        punch_timer_.async_wait([send_batch_ref](const std::error_code& ec) {
             if (ec) return;
-            (*retransmit_ref)();
+            (*send_batch_ref)();
         });
     };
-    (*do_retransmit)();
+    (*do_send_batch)();
 }
 
 void frp_punch_engine::start_punch_read_loop()
