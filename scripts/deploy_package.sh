@@ -316,6 +316,7 @@ FRP (Fast Reverse Proxy) 是一个基于 TCP 的内网穿透工具，支持 TCP/
 |------|------|------|
 | `--config <path>` | `-c` | 指定 JSON 配置文件路径 |
 | `--print-example-config` | `-p` | 打印示例配置并退出 |
+| `--fix` | `-f` | 加载旧配置并生成 `<config>.fix` 修复版配置后退出 |
 | `--version` | `-v` | 显示版本信息 |
 | `--help` | `-h` | 显示帮助信息 |
 

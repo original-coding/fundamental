@@ -159,6 +159,18 @@ inline std::string dump_frp_config_example_json(const ConfigType& config) {
     return Fundamental::io::to_comment_json(config);
 }
 
+template <typename ConfigType>
+inline bool save_frp_config_fix_file(const std::string& config_path, const ConfigType& config,
+                                     std::string& error_message) {
+    const std::string fixed_config_path = config_path + ".fix";
+    const std::string fixed_config_data = dump_frp_config_example_json(config);
+    if (!Fundamental::fs::WriteFile(fixed_config_path, fixed_config_data.data(), fixed_config_data.size())) {
+        error_message = Fundamental::StringFormat("failed to write fixed config file:{}", fixed_config_path);
+        return false;
+    }
+    return true;
+}
+
 frp_public_server_config make_example_public_server_config();
 
 frp_proxy_client_config make_example_proxy_client_config();

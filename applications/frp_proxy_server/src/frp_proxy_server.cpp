@@ -27,6 +27,8 @@ int main(int argc, char* argv[]) {
                          Fundamental::arg_parser::param_type::required_param, "path");
     arg_parser.AddOption("print-example-config", "print example json config and exit", 'p',
                          Fundamental::arg_parser::param_type::with_none_param);
+    arg_parser.AddOption("fix", "generate config_path.fix from the loaded config and exit", 'f',
+                         Fundamental::arg_parser::param_type::with_none_param);
 
     if (argc == 1) {
         arg_parser.ShowHelp();
@@ -57,6 +59,15 @@ int main(int argc, char* argv[]) {
     if (!load_frp_config_file(config_path, config, error_message) || !validate_config(config, error_message)) {
         FERR("invalid frp public server config:{} err:{}", config_path, error_message);
         return 1;
+    }
+
+    if (arg_parser.HasParam("fix")) {
+        if (!save_frp_config_fix_file(config_path, config, error_message)) {
+            FERR("fix config failed:{}", error_message);
+            return 1;
+        }
+        FINFO("generated fixed config:{}", config_path + ".fix");
+        return 0;
     }
 
     initialize_logger_from_frp_config(config);
