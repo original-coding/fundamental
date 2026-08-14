@@ -41,6 +41,14 @@ cat > "${DEPLOY_DIR}/server.json" << 'SERVER_JSON'
     "traffic_secret": "dev-secret",
     "allowed_register_keys": ["dev-key"],
     "data_channel_idle_timeout_seconds": 120,
+    //日志输出目录
+    "log_output_path": "logs",
+    //日志文件名前缀
+    "log_program_name": "frp_proxy_server",
+    //日志输出级别 0=trace 1=debug 2=info 3=warn 4=err 5=critical 6=off
+    "log_level": 1,
+    //是否输出到控制台
+    "enable_console_output": true,
     "ssl": {
         "certificate_path": "local.crt",
         "private_key_path": "local.key",
@@ -62,6 +70,14 @@ cat > "${DEPLOY_DIR}/client.json" << 'CLIENT_JSON'
     "nat_type": 2,
     "local_ip": "127.0.0.1",
     "data_channel_idle_timeout_seconds": 120,
+    //日志输出目录
+    "log_output_path": "logs",
+    //日志文件名前缀
+    "log_program_name": "frp_proxy_client",
+    //日志输出级别 0=trace 1=debug 2=info 3=warn 4=err 5=critical 6=off
+    "log_level": 1,
+    //是否输出到控制台
+    "enable_console_output": true,
     "ssl": {
         "certificate_path": "local.crt",
         "private_key_path": "local.key",
@@ -188,6 +204,17 @@ FRP (Fast Reverse Proxy) 是一个基于 TCP 的内网穿透工具，支持 TCP/
 | `traffic_secret` | 流量加密密钥，三方必须一致 |
 | `allowed_register_keys` | 允许的注册密钥列表 |
 | `data_channel_idle_timeout_seconds` | 数据通道空闲超时，0=禁用 |
+
+### 日志配置
+
+服务器和客户端配置均支持以下顶层日志字段：
+
+| 字段 | 说明 |
+|------|------|
+| `log_output_path` | 日志输出目录，默认 `logs` |
+| `log_program_name` | 日志文件名前缀，最终文件名会追加进程 ID |
+| `log_level` | 最小日志级别：0=trace, 1=debug, 2=info, 3=warn, 4=err, 5=critical, 6=off |
+| `enable_console_output` | 是否同时输出到控制台，默认 `true` |
 
 ### 客户端配置 (`client.json`)
 

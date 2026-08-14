@@ -8,6 +8,11 @@ namespace network::proxy
 {
 
 bool validate_config(const frp_public_server_config& config, std::string& error_message) {
+    if (config.log_level < static_cast<std::int32_t>(Fundamental::LogLevel::trace) ||
+        config.log_level > static_cast<std::int32_t>(Fundamental::LogLevel::off)) {
+        error_message = "log_level must be between 0(trace) and 6(off)";
+        return false;
+    }
     if (config.listen_tcp_port == 0) {
         error_message = "listen_tcp_port must be non-zero";
         return false;
@@ -35,6 +40,11 @@ bool validate_config(const frp_public_server_config& config, std::string& error_
 }
 
 bool validate_config(const frp_proxy_client_config& config, std::string& error_message) {
+    if (config.log_level < static_cast<std::int32_t>(Fundamental::LogLevel::trace) ||
+        config.log_level > static_cast<std::int32_t>(Fundamental::LogLevel::off)) {
+        error_message = "log_level must be between 0(trace) and 6(off)";
+        return false;
+    }
     if (config.public_server_host.empty()) {
         error_message = "public_server_host is required";
         return false;

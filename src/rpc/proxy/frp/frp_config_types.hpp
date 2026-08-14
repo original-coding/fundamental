@@ -3,6 +3,7 @@
 #include "frp_command.hpp"
 #include "fundamental/basic/filesystem_utils.hpp"
 #include "fundamental/basic/log.h"
+#include "fundamental/basic/utils.hpp"
 #include "fundamental/rttr_handler/deserializer.h"
 #include "fundamental/rttr_handler/serializer.h"
 #include "network/network.hpp"
@@ -65,6 +66,10 @@ struct frp_public_server_config {
     std::string traffic_secret;
     std::vector<std::string> allowed_register_keys;
     std::uint32_t data_channel_idle_timeout_seconds = 600; // 空闲检测默认 10min（链路检测由 KCP keepalive 承担）
+    std::string log_output_path                     = "logs";
+    std::string log_program_name                    = "frp_proxy_server";
+    std::int32_t log_level = static_cast<std::int32_t>(Fundamental::LogLevel::debug);
+    bool enable_console_output                      = true;
     frp_tls_server_config_file ssl;
     virtual ~frp_public_server_config() = default;
     RTTR_ENABLE()
@@ -87,11 +92,26 @@ struct frp_proxy_client_config {
     std::uint8_t nat_type = frp_nat_type_disabled;
     std::string local_ip;
     std::uint32_t data_channel_idle_timeout_seconds = 600; // 空闲检测默认 10min（链路检测由 KCP keepalive 承担）
+    std::string log_output_path                     = "logs";
+    std::string log_program_name                    = "frp_proxy_client";
+    std::int32_t log_level = static_cast<std::int32_t>(Fundamental::LogLevel::debug);
+    bool enable_console_output                      = true;
     frp_tls_client_config_file ssl;
     std::vector<frp_proxy_client_group_config> groups;
     virtual ~frp_proxy_client_config() = default;
     RTTR_ENABLE()
 };
+
+template <typename ConfigType>
+inline void initialize_logger_from_frp_config(const ConfigType& config) {
+    Fundamental::Logger::LoggerInitOptions options;
+    options.logOutputPath        = config.log_output_path;
+    options.logOutputProgramName = config.log_program_name;
+    options.minimumLevel         = static_cast<Fundamental::LogLevel>(config.log_level);
+    options.enableConsoleOutput  = config.enable_console_output;
+    options.logFormat            = "%^[%L]%H:%M:%S.%e%$[%t] %v ";
+    Fundamental::Logger::Initialize(std::move(options));
+}
 
 inline network_client_ssl_config to_network_config(const frp_tls_client_config_file& config) {
     network_client_ssl_config ret;
@@ -125,6 +145,7 @@ inline bool load_frp_config_file(const std::string& path, ConfigType& output, st
         error_message = Fundamental::StringFormat("failed to read config file:{}", path);
         return false;
     }
+    raw = Fundamental::Utils::RemoveComments(raw);
     if (!Fundamental::io::from_json(raw, output)) {
         error_message = Fundamental::StringFormat("failed to parse config file as json:{}", path);
         return false;
@@ -135,7 +156,7 @@ inline bool load_frp_config_file(const std::string& path, ConfigType& output, st
 template <typename ConfigType>
 inline std::string dump_frp_config_example_json(const ConfigType& config) {
     __register_frp_config_reflect_type__();
-    return Fundamental::io::to_json(config);
+    return Fundamental::io::to_comment_json(config);
 }
 
 frp_public_server_config make_example_public_server_config();

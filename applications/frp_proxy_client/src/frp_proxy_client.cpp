@@ -16,14 +16,13 @@ int main(int argc, char* argv[]) {
 #ifdef _MSC_VER
     SetThreadUILanguage(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
 #endif
-    Fundamental::Logger::LoggerInitOptions options;
-    options.minimumLevel = Fundamental::LogLevel::debug;
-    options.logFormat    = "%^[%L]%H:%M:%S.%e%$[%t] %v ";
-    Fundamental::Logger::Initialize(std::move(options));
-    FINFO("frp_proxy_client built at {} {}", __DATE__, __TIME__);
+    Fundamental::Logger::LoggerInitOptions bootstrap_options;
+    bootstrap_options.minimumLevel = Fundamental::LogLevel::debug;
+    bootstrap_options.logFormat    = "%^[%L]%H:%M:%S.%e%$[%t] %v ";
+    Fundamental::Logger::Initialize(std::move(bootstrap_options));
 
     Fundamental::arg_parser arg_parser { argc, argv, "2.0.0" };
-    arg_parser.AddOption("config", "json config path", 'c',
+    arg_parser.AddOption("config", "json/jsonc config path", 'c',
                          Fundamental::arg_parser::param_type::required_param, "path");
     arg_parser.AddOption("print-example-config", "print example json config and exit", 'p',
                          Fundamental::arg_parser::param_type::with_none_param);
@@ -51,6 +50,9 @@ int main(int argc, char* argv[]) {
         FERR("invalid config:{} err:{}", config_path, error_message);
         return 1;
     }
+
+    initialize_logger_from_frp_config(config);
+    FINFO("frp_proxy_client built at {} {}", __DATE__, __TIME__);
 
     network::init_io_context_pool(config.threads);
     auto agent = network::make_guard<frp_unified_client>(std::move(config));
