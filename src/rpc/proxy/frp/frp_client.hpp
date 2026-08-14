@@ -16,6 +16,7 @@
 #include <array>
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -231,6 +232,11 @@ public:
     asio::steady_timer& idle_timer() { return idle_timer_; }
     asio::steady_timer& handshake_timer() { return handshake_timer_; }
 
+    // --- punch retry (accessor-driven) ---
+    void schedule_punch_retry(std::function<void()> cb);
+    void cancel_punch_retry();
+    void reset_punch_retry();
+
     // --- idle timeout ---
     /// 设置数据面空闲超时（连接建立时由 accessor/provider 从配置注入）
     void set_idle_timeout_seconds(std::uint32_t sec) { idle_timeout_sec_ = sec; }
@@ -256,9 +262,20 @@ private:
     const asio::any_io_executor executor_;
     asio::steady_timer idle_timer_;
     asio::steady_timer handshake_timer_;
+    asio::steady_timer punch_retry_timer_;
 
     // punch engine (created on maybe_start_p2p)
     std::shared_ptr<frp_punch_engine> punch_engine_;
+
+    // Accessor-side punch retry state.  Only the accessor schedules the retry
+    // callback; the provider merely resets its own engine when a new punch
+    // start arrives.
+    static constexpr std::uint32_t kMaxPunchRetries       = 10000;
+    static constexpr std::chrono::seconds kPunchRetryStep{10};
+    static constexpr std::chrono::seconds kPunchRetryMax{60};
+    std::uint32_t punch_retry_count_ = 0;
+    bool punch_retry_pending_        = false;
+    std::function<void()> punch_retry_cb_;
 
     // KCP channel (wraps IKCPCB lifecycle + encryption)
     std::shared_ptr<kcp_channel> kcp_ch_;

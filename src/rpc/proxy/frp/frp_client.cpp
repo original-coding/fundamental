@@ -328,9 +328,11 @@ void frp_signal_channel::notify_disconnect_once() {
 relay_data_channel::relay_data_channel(const asio::any_io_executor& ex,
                                        std::string conn_id, std::string peer) :
 connection_uuid_(std::move(conn_id)), peer_uuid_(std::move(peer)), executor_(ex),
-idle_timer_(ex), handshake_timer_(ex), backend_socket_(ex), local_socket_(ex) {
+idle_timer_(ex), handshake_timer_(ex), punch_retry_timer_(ex),
+backend_socket_(ex), local_socket_(ex) {
     io_context_pool::Instance().reg_timer(idle_timer_);
     io_context_pool::Instance().reg_timer(handshake_timer_);
+    io_context_pool::Instance().reg_timer(punch_retry_timer_);
 }
 
 std::shared_ptr<relay_data_channel> relay_data_channel::create(const asio::any_io_executor& ex,
@@ -348,6 +350,7 @@ void relay_data_channel::reg_pool_object() {
 relay_data_channel::~relay_data_channel() {
     io_context_pool::Instance().unreg_timer(idle_timer_);
     io_context_pool::Instance().unreg_timer(handshake_timer_);
+    io_context_pool::Instance().unreg_timer(punch_retry_timer_);
     io_context_pool::Instance().unreg_object(this);
     if (kcp_ch_) kcp_ch_->close();
     if (p2p_socket_) { std::error_code ec; p2p_socket_->close(ec); }
@@ -370,6 +373,48 @@ void relay_data_channel::attach_tcp(std::shared_ptr<frp_tcp_channel> tc) {
 
 void relay_data_channel::set_on_release(std::function<void()> cb) { on_release_ = std::move(cb); }
 
+void relay_data_channel::schedule_punch_retry(std::function<void()> cb) {
+    if (closed_.load() || punch_retry_pending_ || !cb) return;
+    if (punch_retry_count_ >= kMaxPunchRetries) {
+        FWARN("relay_data_channel punch retry exhausted conn={}", connection_uuid_);
+        return;
+    }
+
+    ++punch_retry_count_;
+    const auto delay_seconds = std::min(
+        static_cast<std::int64_t>(punch_retry_count_) * kPunchRetryStep.count(),
+        static_cast<std::int64_t>(kPunchRetryMax.count()));
+
+    FINFO("relay_data_channel punch retry conn={} in {}s (attempt {})",
+          connection_uuid_, delay_seconds, punch_retry_count_);
+
+    punch_retry_cb_     = std::move(cb);
+    punch_retry_pending_ = true;
+    punch_retry_timer_.expires_after(std::chrono::seconds(delay_seconds));
+    punch_retry_timer_.async_wait([this, self = shared_from_this()](const std::error_code& ec) {
+        if (ec || closed_.load() || p2p_success_) {
+            punch_retry_pending_ = false;
+            return;
+        }
+
+        auto cb = std::move(punch_retry_cb_);
+        punch_retry_cb_ = nullptr;
+        punch_retry_pending_ = false;
+        if (cb) cb();
+    });
+}
+
+void relay_data_channel::cancel_punch_retry() {
+    punch_retry_timer_.cancel();
+    punch_retry_cb_ = nullptr;
+    punch_retry_pending_ = false;
+}
+
+void relay_data_channel::reset_punch_retry() {
+    punch_retry_count_ = 0;
+    cancel_punch_retry();
+}
+
 void relay_data_channel::release_obj() {
     if (closed_.load()) return;
     if (io_context_pool::Instance().running_in_io_thread()) { close(); return; }
@@ -386,6 +431,7 @@ void relay_data_channel::close() {
     io_context_pool::Instance().unreg_object(this);
     io_context_pool::Instance().unreg_timer(idle_timer_);
     io_context_pool::Instance().unreg_timer(handshake_timer_);
+    io_context_pool::Instance().unreg_timer(punch_retry_timer_);
     if (punch_engine_) { punch_engine_->release(); punch_engine_.reset(); }
     if (kcp_ch_) { kcp_ch_->close(); kcp_ch_.reset(); }
     if (p2p_socket_) { std::error_code ec; p2p_socket_->close(ec); p2p_socket_.reset(); }
@@ -393,6 +439,7 @@ void relay_data_channel::close() {
     std::error_code ec;
     idle_timer_.cancel();
     handshake_timer_.cancel();
+    cancel_punch_retry();
     // 只 clear 不 reset：在途写的完成回调捕获 relay 强引用，writer 必须活到回调执行完
     if (data_writer_) data_writer_->clear();
     if (backend_socket_.is_open()) backend_socket_.close(ec);

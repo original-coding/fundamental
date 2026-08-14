@@ -1016,6 +1016,19 @@ void frp_accessor::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
     if (signal_->probed_nat_type() == frp_nat_type_disabled) return;
 
+    if (ch->is_closed() || ch->is_p2p_active()) return;
+
+    // Each retry is a fresh punch attempt.  Clear the previous attempt's
+    // handshake timer and engine before sending a new accessor_punch_start;
+    // otherwise the old timer can kill the newly-created engine.
+    ch->handshake_timer().cancel();
+    if (ch->punch_engine()) {
+        ch->punch_engine()->release();
+        ch->punch_engine().reset();
+    }
+    ch->my_external_ip().clear();
+    ch->my_external_port() = 0;
+
 
 
     FINFO("starting p2p punch for conn={}", ch->connection_uuid());
@@ -1052,6 +1065,14 @@ void frp_accessor::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
         signal_->send_p2p_command(peer_uuid, std::move(json_payload));
 
+    };
+
+    const auto schedule_retry = [weak = std::weak_ptr<frp_accessor>(self),
+                                 cid = ch->connection_uuid()]() {
+        auto accessor = weak.lock();
+        if (!accessor) return;
+        auto it = accessor->channels().find(cid);
+        if (it != accessor->channels().end()) accessor->maybe_start_p2p(it->second);
     };
 
 
@@ -1096,11 +1117,20 @@ void frp_accessor::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
         ch->handshake_timer().cancel();
 
+        ch->reset_punch_retry();
+
     });
 
-    engine->set_on_failed([self, ch] {
+    engine->set_on_failed([self, ch, schedule_retry] {
 
         FWARN("p2p failed conn={}", ch->connection_uuid());
+
+        ch->handshake_timer().cancel();
+        if (ch->punch_engine()) {
+            ch->punch_engine()->release();
+            ch->punch_engine().reset();
+        }
+        ch->schedule_punch_retry(schedule_retry);
 
     });
 
@@ -1116,13 +1146,17 @@ void frp_accessor::maybe_start_p2p(const std::shared_ptr<relay_data_channel>& ch
 
     ch->handshake_timer().expires_after(std::chrono::seconds(30));
 
-    ch->handshake_timer().async_wait([self, ch](const std::error_code& ec) {
+    ch->handshake_timer().async_wait([self, ch, schedule_retry](const std::error_code& ec) {
 
         if (ec || ch->is_closed() || ch->is_p2p_active()) return;
 
         FWARN("p2p handshake timeout conn={}", ch->connection_uuid());
 
-        if (ch->punch_engine()) { ch->punch_engine()->release(); ch->punch_engine().reset(); }
+        if (ch->punch_engine()) {
+            ch->punch_engine()->release();
+            ch->punch_engine().reset();
+        }
+        ch->schedule_punch_retry(schedule_retry);
 
     });
 

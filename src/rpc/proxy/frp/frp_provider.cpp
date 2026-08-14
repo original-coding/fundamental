@@ -470,9 +470,15 @@ void frp_provider::handle_p2p_message(std::uint8_t cmd, std::string payload) {
 
 
 
-        // Create punch engine on provider side
+        // Each accessor_punch_start starts a fresh attempt.  Drop any stale
+        // engine from the previous attempt before creating a new one.
+        ch->handshake_timer().cancel();
+        if (ch->punch_engine()) {
+            ch->punch_engine()->release();
+            ch->punch_engine().reset();
+        }
 
-        if (!ch->punch_engine()) {
+        {
 
             auto self = shared_from_this();
 
@@ -567,6 +573,12 @@ void frp_provider::handle_p2p_message(std::uint8_t cmd, std::string payload) {
             engine->set_on_failed([self, ch] {
 
                 FWARN("p2p failed conn={}", ch->connection_uuid());
+
+                ch->handshake_timer().cancel();
+                if (ch->punch_engine()) {
+                    ch->punch_engine()->release();
+                    ch->punch_engine().reset();
+                }
 
             });
 
