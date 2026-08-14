@@ -1,7 +1,7 @@
 # ADR-0001: 接口冻结 + 崩溃修复豁免
 
 - 状态：已接受（2026-08-05）
-- 背景：`docs/refactoring-plan.md`、`docs/frp-migration-plan.md`、`docs/migration-impact-analysis.md` 定稿后的网络层第二轮改造（RPC 核心 / WebSocket 转发 / SOCKS5 / protocal_pipe 四个协议任务）
+- 背景：网络层第二轮改造（RPC 核心 / WebSocket 转发 / SOCKS5 / protocal_pipe 四个协议任务）
 
 ## 决策
 

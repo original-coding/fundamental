@@ -66,16 +66,7 @@
 - `max_body_size==0` 即 release 与用户异步 fill 存在时序竞争
 
 **applications（frp/代理）**
-> 2026-08-03 全量审计结论（按 `docs/asio-async-standards.md` §10 清单）：详见 `docs/frp-migration-plan.md`（修订版 v2）。核心结论：
-- **中继通道实际是 4 个 executor 交叉**（比 v1 判断更严重）：relay 绑 A（signal_->get_executor()）、tcp_ 绑 C（另取 get_io_context()）、backend_udp_socket_ 绑 D、全部驱动代码（on_client_command/on_subscribe）跑在信号线程 B——同 socket 的 async op 从错误线程发起
-- **ikcp 状态机被多线程并发访问**（feed/send 来自 B/C/D，tick 定时器在 A）——最活跃的崩溃源
-- 同 socket 并发写三处：`async_write_raw` 无队列（frp_client.cpp:201-212）、kcp on_frame 直写 backend/local（:386-404）、（backend 写队列 handle_backend_write_queue 存在但无调用者）
-- `channels_` 在 range-for 迭代中被 `on_release_` erase → 迭代器失效（frp_accessor.cpp:1042、frp_provider.cpp:1017）
-- 信号客户端自身双 executor（frp_signal_client.cpp:36-38 vs 60-62）：定时器在 A、signal channel 在 B
-- punch engine `start_punch_at` 未取消 echo 循环的 pending receive → 同 socket 双接收者（frp_punch_engine.cpp:369 vs 708）
-- `frp_signal_session::release_obj` 任意线程直接 cancel 定时器（frp_server.cpp:256-264）；backend 读循环错误无限重挂自旋（frp_provider.cpp:249,267）
-- relay 的 `closed_/writing_/backend_connected_` 普通 bool 跨线程裸读写（frp_client.hpp:229-234）
-- frp 模块弱哨兵 + reference_ CAS 模式比 RUDP 成熟，但生命周期层不完整（relay close 直接清理、析构同步关 socket、frp_tcp_channel::release_obj 无幂等）
+> FRP 已完成单 executor 收敛、relay 三层关闭、写串行化、KCP/P2P 生命周期收敛等改造。当前实现与协议见 `src/rpc/proxy/frp/FRP_PROTOCOL.md`。
 
 ---
 
@@ -182,23 +173,7 @@
 
 ### 3.4 applications（frp/代理）
 
-> 详细可执行计划：`docs/frp-migration-plan.md`（修订版 v2，按阶段 1-4 组织，含 ★ 新增项）
-
-| 优先级 | 改造项 | 对应问题 |
-|--------|--------|----------|
-| P0 | 信号客户端单 executor 收敛：frp_signal_client 构造固定 executor，signal channel 复用（frp_signal_client.cpp:36-38 vs 60-62） | 定时器与信号通道跨 context |
-| P0 | 中继通道绑定单一 io_context：tcp_/backend_udp_socket_/kcp/定时器统一用通道 executor；信号线程驱动代码 post 化 | 4 executor 交叉 + ikcp 并发 |
-| P0 | 同一 socket 写串行化：async_write_raw 入写队列；kcp on_frame 的 backend/local 写接入写队列（接线 handle_backend_write_queue 或 serialized_writer） | 并发组合 IO |
-| P0 | channels_ 关闭先搬出再迭代（accessor/provider close()） | 迭代中删除 UB |
-| P0 | 服务端 register_data_channel 对 dst_session 的操作 post 到其 executor | 跨线程定时器/读循环 |
-| P1 | punch engine 双接收者：start_punch_at 先 cancel echo 接收再开 punch 读循环 | 同 socket 双 receive |
-| P1 | frp_signal_session release_obj 三层化（只投递，cancel 移入 io 线程） | 跨线程定时器 cancel |
-| P1 | backend 读循环错误收敛到关闭序列，消除自旋 | 半死连接/自旋 |
-| P1 | relay 布尔成员原子化或线程内化 | 数据竞争 |
-| P1 | UDP listener 关闭后停止读循环（检查 socket 是否 open），`local_udp_socket_` 改为共享所有权 | 自旋/悬垂 |
-| P1 | relay_data_channel 三层模型：release_obj 入口 + 关闭序列 + 析构兜底；frp_tcp_channel::release_obj 幂等 | 生命周期不完整 |
-| P2 | 命令帧解析：验证 default 释放是否造成重连风暴，明确各命令的合法接收者 | 协议缺陷 |
-| P2 | on_release 时清理 channels_（先搬出再关，见 P0 行） | 泄漏/UB |
+> FRP 已完成。当前功能链路、命令集、P2P 参数、超时与保活策略见 `src/rpc/proxy/frp/FRP_PROTOCOL.md`。
 
 ---
 
@@ -216,7 +191,7 @@
 ### M2 结构（生命周期与线程模型）
 1. 统一关闭序列（2.4）+ 定时器所有权规则（2.5）
 2. this_ptr 全程持有（RUDP 回调链、rpc/http 回调触发点）
-3. 线程亲和性：frp 中继通道、signal 通道绑定单一 context
+3. 线程亲和性：frp 中继通道、signal 通道绑定单一 context（已完成）
 4. **验证**：frp 全链路（信令 + 中继 + P2P 打洞）压力测试；断连/重连风暴场景
 
 ### M3 加固（长期稳定）

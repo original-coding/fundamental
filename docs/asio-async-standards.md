@@ -3,7 +3,7 @@
 > 版本：v1.0（2026-08-03）
 > 适用范围：fh-fundamental 所有基于 asio 的网络代码（网络层、RPC、HTTP、代理、应用层）
 > 强制程度：**必须（MUST）/ 应该（SHOULD）/ 建议（MAY）**，与 RFC 2119 语义一致
-> 配套文档：`docs/refactoring-plan.md`（改造计划）、`src/rpc/proxy/frp/async_resource_design.md`（异步资源调研）
+> 配套文档：`docs/refactoring-plan.md`（改造计划）、`src/rpc/proxy/frp/FRP_PROTOCOL.md`（FRP 协议现状）
 
 ---
 

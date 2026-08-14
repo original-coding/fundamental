@@ -23,7 +23,7 @@
 | network/rudp | 无 | 无 | 状态机（§2）、三层释放（§4）、定时器登记（§9.2） | 无（可最先迁移） |
 | rpc（connection/rpc_client/rpc_server/netlink） | 无 | 无 | executor_ 悬垂（P0）、post 化（§3.2）、last_err_ 原子化、定时器登记 | network |
 | http | 无 | 无 | 写队列（§3.4/8.3）、response_ 跨线程（§3.2）、Content-Length 上限（§7.1）、超时定时器启动+登记 | network |
-| frp（rpc/proxy/frp） | 无 | 无 | 对象登记（§9.3）、通道绑定单一 io_context（§3.3）、async_write_raw 写队列、local_udp_socket_ 悬垂 | rpc + network |
+| frp（rpc/proxy/frp） | 无 | 无 | 已完成对象登记、单 executor、写串行化、relay/P2P 生命周期收敛；当前链路见 `src/rpc/proxy/frp/FRP_PROTOCOL.md` | rpc + network |
 | ws_port_pipe | 无 | 无 | 同 http 类问题 | rpc + network |
 | applications（frp_proxy_*、tcp_custom_proxy） | 无 | **退出行为**（依赖 §2.1） | 顶层对象接入 reg_object（§9.3） | 下层全部 |
 
@@ -92,13 +92,7 @@
 
 ### 3.4 frp（rpc/proxy/frp）
 
-- **现状**：跨 io_context 竞争（架构级，M2）；`async_write_raw` 并发写；`local_udp_socket_` 悬垂；信号命令解析默认释放
-- **迁移清单**：
-  1. **M1**：`frp_signal_session`、`relay_data_channel` 等动态对象接入 `reg_object/unreg_object`（§9.3）——直接关系到 §2.1 的退出安全
-  2. **M1**：`async_write_raw` → 写队列（§8.3）
-  3. **M2**：中继通道绑定单一 io_context（信号线程与连接线程跨线程读写 ch 成员）；punch engine 与 relay 单一接收者
-  4. **M2**：`local_udp_socket_` 裸指针 → 生命周期归属修正
-- **注意**：frp 是跨模块聚合点，依赖 rpc + network 的迁移结果，放最后
+- **状态**：已完成。当前协议、数据通道与 P2P 链路见 `src/rpc/proxy/frp/FRP_PROTOCOL.md`。
 
 ### 3.5 ws_port_pipe / applications
 
@@ -114,8 +108,8 @@ M1.0  退出顺序安全（§2.1 三项动作）           ← 先做，防挂�
 M1.1  network/rudp 试点（三层模型全落地）      ← 验证方法论
 M1.2  rpc 止血（executor_ + post 化 + 定时器登记）
 M1.3  http（写队列 + 长度上限 + 超时定时器）
-M1.4  frp 接入（reg_object + 写队列）
-M2    frp/ws_port_pipe 架构级（线程亲和性、统一关闭序列）
+M1.4  frp 接入（reg_object + 写队列）——已完成
+M2    frp 架构级（线程亲和性、统一关闭序列）——已完成；ws_port_pipe 继续按本计划推进
 M3    ASAN + soak test 全绿，规范 §10 清单复查
 ```
 
@@ -129,6 +123,6 @@ M3    ASAN + soak test 全绿，规范 §10 清单复查
 |---|---|---|---|
 | 1 | 阻塞 stop() 挂死（未迁移就存在） | **高** | M1.0 退出顺序修复（已在 WIP 中，需合入验证） |
 | 2 | 定时器未登记 → io 排空不完整 → stop 超时 | 中 | 各模块迁移时逐步接入 reg_timer（§9.2） |
-| 3 | 动态对象未 reg_object → 池停不释放 | 中 | frp/ws_port_pipe 迁移时接入（§9.3） |
+| 3 | 动态对象未 reg_object → 池停不释放 | 中 | frp 已完成接入；ws_port_pipe 迁移时接入（§9.3） |
 | 4 | `post_and_wait` 死锁（持锁/回调反向等待） | 中 | §4.5 三条 MUST，评审清单把关 |
 | 5 | 迁移中途双轨运行（部分模块用 reference_、部分用状态机） | 低 | 规范明确"新代码用状态机，过渡期保留 reference_"，不做批量替换 |

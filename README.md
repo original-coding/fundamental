@@ -167,7 +167,7 @@ cd build-linux && ctest --output-on-failure
 
 ## FRP（Fast Reverse Proxy）
 
-FRP 是一个 NAT 穿透反向代理系统，用于访问位于 NAT/防火墙后的服务。支持两种传输模式：
+FRP 是一个 NAT 穿透反向代理系统，用于访问位于 NAT/防火墙后的服务。数据路径有两种模式：
 
 - **TCP Relay** — 流量经公共服务端通过 TCP 中转。始终可用，延迟较高。
 - **P2P Upgrade** — relay 建立后通过 NAT 打洞建立端到端直连 UDP 通道。延迟更低，需要双方 NAT 类型兼容。
@@ -197,20 +197,20 @@ FRP 是一个 NAT 穿透反向代理系统，用于访问位于 NAT/防火墙后
 
 **角色说明：**
 
-- **Public Server**（公共服务端）— 中心协调器。负责认证、服务注册与发现、flow 创建、relay 配对以及 P2P upgrade 协调。不承载会话数据。
-- **Provider 端** — 注册本地后端服务（如 `grpc-backend → 127.0.0.1:50051`），等待 flow 分配。流量出口。
-- **Accessor 端** — 在本地端口监听客户端连接。客户端连接后创建 flow 以访问 provider 的后端服务。流量入口。
+- **Public Server**（公共服务端）— 中心协调器。负责认证、服务注册与发现、`channel_open` 数据通道配对、relay 透传以及 P2P upgrade 信令中转。服务端只理解通道路由，不解析业务数据。
+- **Provider 端** — 注册本地后端服务（如 `grpc-backend → 127.0.0.1:50051`），收到连接请求后连接真实后端。流量出口。
+- **Accessor 端** — 在本地端口监听客户端连接。客户端连接后发起 `channel_open` 以访问 provider 的后端服务。流量入口。
 
 > Provider 和 Accessor 是同一 `frp_proxy_client` 进程内的端点角色，不是独立二进制。
 
 **核心概念：**
 
-- **Flow** — 以 `flow_id` 标识的单次代理会话。生命周期：创建 → relay 建立 → （可选 P2P upgrade）→ 数据传输 → 关闭。
-- **Transport** — 数据路径类型：`tcp_relay`（经服务器中转）或 `p2p`（直连 UDP，upgrade 成功后）。
+- **Connection** — 以 `connection_uuid` 标识的单次代理会话。生命周期：Accessor 本地连接建立 → `channel_open` 两阶段配对 → relay 建立 → （可选 P2P upgrade）→ 数据传输 → 关闭。
+- **Transport** — 被代理服务的传输协议：`0` = TCP，`1` = UDP。数据路径先经服务器 relay 中转，P2P upgrade 成功后切换为 UDP 直连。
 - **NAT Type** — `disabled`(0)、`symmetric`(1)、`cone`(2)。决定 P2P upgrade 是否可行。双方均为 symmetric 或任一方 disabled 则无法 P2P。
-- **Startup Probe** — 信号通道建立前，设备通过向服务器两个 UDP 端口发送加密探测包判断自身 NAT 类型。两次回显的 `ip:port` 相同 → cone，不同 → symmetric。
+- **Startup Probe** — 认证通过后，设备通过向服务器两个 UDP 端口发送加密探测包判断自身 NAT 类型。两次回显的 `ip:port` 相同 → cone，不同 → symmetric。
 - **Time Sync** — startup probe 后，设备通过 NTP-like 协议与服务器进行时钟同步（`time_sync_request/response`），计算时钟偏移量。P2P 打洞时双方基于同步时钟同时启动，最大化打洞成功率。
-- **P2P Upgrade** — relay 建立后，accessor 主动发起 `p2p_handshake` 交换双方公网端点信息，然后通过时钟同步的 `punch_start` 实现双方同时打洞。成功后 KCP 传输层从 TCP relay 切换为 UDP，不重建 KCP 实例。
+- **P2P Upgrade** — relay 建立后，accessor 主动发起 `accessor_punch_start`，双方创建 punch engine 并交换公网端点信息；匹配后通过 `punch_confirm → punch_confirm_ack → punch_confirm_ok` 完成握手。成功后 KCP 传输层从 TCP relay 切换为 UDP，不重建 KCP 实例。
 
 ### 本地开发快速启动
 
@@ -237,16 +237,22 @@ bash src/rpc/proxy/frp/dev-local.sh stop
 ./build-linux/applications/frp_proxy_client/frp_proxy_client --print-example-config
 ```
 
+以下为与 `--print-example-config` 字段一致的最小可读示例；客户端完整示例还会包含第二个 `demo-key-2` listener group。
+
 #### Public Server 配置 (`server.json`)
 
 ```json
 {
-  "threads": 2,
+  "threads": 8,
   "listen_tcp_port": 32000,
   "listen_udp_port": 32001,
   "traffic_secret": "traffic-secret-demo",
   "allowed_register_keys": ["demo-register-key"],
-  "data_channel_idle_timeout_seconds": 120,
+  "data_channel_idle_timeout_seconds": 600,
+  "log_output_path": "logs",
+  "log_program_name": "frp_proxy_server",
+  "log_level": 1,
+  "enable_console_output": true,
   "ssl": { "disable_ssl": true }
 }
 ```
@@ -257,7 +263,7 @@ bash src/rpc/proxy/frp/dev-local.sh stop
 | `listen_udp_port` | UDP 探测与 P2P 协调的基础端口，设为 `0` 则禁用 P2P（仅 relay 模式） |
 | `traffic_secret` | 用于 HMAC 认证和 AES-256-CTR 加密的共享密钥 |
 | `allowed_register_keys` | 允许客户端注册的密钥列表 |
-| `data_channel_idle_timeout_seconds` | 数据通道空闲超时（秒），`0` 则禁用 |
+| `data_channel_idle_timeout_seconds` | 数据通道业务空闲超时（秒），默认 `600`，`0` 则禁用；底层死链由 KCP keepalive 检测 |
 
 #### Client 统一配置 (`client.json`)
 
@@ -265,23 +271,27 @@ bash src/rpc/proxy/frp/dev-local.sh stop
 
 ```json
 {
-  "threads": 4,
+  "threads": 8,
   "public_server_host": "127.0.0.1",
   "public_server_tcp_port": 32000,
   "public_server_udp_port": 32001,
   "traffic_secret": "traffic-secret-demo",
   "nat_type": 2,
-  "local_ip": "",
-  "data_channel_idle_timeout_seconds": 120,
+  "local_ip": "192.168.1.100",
+  "data_channel_idle_timeout_seconds": 600,
+  "log_output_path": "logs",
+  "log_program_name": "frp_proxy_client",
+  "log_level": 1,
+  "enable_console_output": true,
   "ssl": { "disable_ssl": true },
   "groups": [
     {
-      "register_key": "key1",
+      "register_key": "demo-key-1",
       "services": [
         {
-          "service_name": "echo",
+          "service_name": "echo-tcp",
           "target_host": "127.0.0.1",
-          "target_port": 12345,
+          "target_port": 18080,
           "service_type": 0,
           "enable_p2p": true
         }
@@ -307,9 +317,9 @@ bash src/rpc/proxy/frp/dev-local.sh stop
 | `groups[].services` | provider 端：注册到服务目录的后端服务列表 |
 | `groups[].listeners` | accessor 端：本地监听端口列表，从服务目录匹配后创建 |
 | `services[].service_type` | `0` = TCP，`1` = UDP |
-| `services[].enable_p2p` | 是否允许该服务的 P2P upgrade |
-| `nat_type` | NAT 类型提示。`0`=disabled，`1`=symmetric，`2`=cone。startup probe 可能会覆盖此值 |
-| `local_ip` | 局域网 IP，用于同网段 P2P 候选。为空则跳过 |
+| `services[].enable_p2p` | 服务目录中携带的 P2P 标记；当前打洞触发主要看 UDP 端口与 NAT 探测结果 |
+| `nat_type` | NAT 类型提示。`0`=disabled，`1`=symmetric，`2`=cone。配置为非 disabled 时才使用 startup probe 结果 |
+| `local_ip` | 当前仅作为配置项存在，数据路径未使用 |
 | `public_server_udp_port` | 设为 `0` 则仅 relay 模式 |
 
 ### 单独启动各组件
@@ -358,34 +368,33 @@ bash src/rpc/proxy/frp/verify-udp-p2p.sh
 FRP 协议通过 TCP 信令通道传输 JSON 编码的命令消息，UDP 探测包使用 AES-256-CTR 对称加密。详见 [FRP_PROTOCOL.md](src/rpc/proxy/frp/FRP_PROTOCOL.md)。
 
 **建联流程：**
-1. （UDP 可用时）客户端通过 UDP 向服务器两个端口发送加密 `p2p_probe` 探测包，判断 NAT 类型（cone/symmetric/disabled）
-2. （UDP 可用时）客户端通过 NTP-like 协议与服务器进行时钟同步（`time_sync_request/response`），计算 `server_clock_offset`
-3. 客户端通过 TCP 连接公共服务端
-4. TLS 握手（可选，可配置）
-5. 客户端发送 `signal_open` 声明信令通道
-6. 服务端发送 `server_hello` 附带 nonce
-7. 客户端发送 `auth_request`，包含 `HMAC-SHA256(secret, nonce)` 摘要
-8. 认证通过后，客户端发送 `register_services` 批量注册所有 groups（即使某 group 无 services 也要发送，用于建立 register_key 关联）
-9. 客户端发送 `subscribe_services` 订阅所有 register_keys 的服务目录
+1. 客户端通过 TCP 连接公共服务端
+2. TLS 握手（可选，可配置）
+3. 客户端发送 `signal_open` 声明信令通道
+4. 服务端发送 `server_hello` 附带 nonce
+5. 客户端发送 `auth_request`，包含 `HMAC-SHA256(secret, nonce)` 摘要
+6. 认证通过后，若 UDP 端口非 `0`，客户端通过 UDP 向服务器两个端口发送加密 `p2p_probe`，判断 NAT 类型（cone/symmetric/disabled）
+7. 若 UDP 端口非 `0`，客户端继续通过 NTP-like 协议进行时钟同步（`time_sync_request/response`），计算 `server_clock_offset`
+8. 客户端发送 `register_services` 批量注册所有 provider groups
+9. 客户端发送 `subscribe_services` 订阅所有 accessor listeners 需要的 register_keys
 
 **数据流转（TCP Relay）：**
 1. 外部客户端连接 Accessor 监听端口
-2. Accessor 向服务端发送 `create_flow_request(service_name, register_key, transport)`
-3. 服务端在 `services_by_register_key_` 中查找，配对 provider，分配 `flow_id`
-4. 服务端向 provider 发送 `prepare_flow`，双方各自建立 TCP relay 连接（`data_open` + KCP 激活）
-5. 服务端 `bind_data_session` 配对双方 data session，发送 `flow_transport_ready`
-6. Provider 连接后端 → 发送 `flow_ready` → 服务端转发给 accessor
+2. Accessor 生成 `connection_uuid`，计算 `register_hash = SHA256(register_key + nonce)`
+3. Accessor 建立新的 TCP 数据连接，发送 `channel_open(status=0)`，payload 为 `frp_client_open`
+4. 服务端按 `from_uuid/dst_uuid/connection_uuid` 路由，将 payload 转发给 Provider 的信令通道
+5. Provider 校验 `register_hash` 并连接后端，随后建立新 TCP 数据连接，发送 `channel_open(status=1)`，payload 为 `frp_client_accept` 或 `frp_client_reject`
+6. 服务端配对双方数据连接后升级为 raw relay；Accessor 收到 `accept` 后激活 KCP
 7. 数据流：外部客户端 ↔ accessor ↔ KCP/TCP-relay ↔ server ↔ provider ↔ 后端
 
 **P2P Upgrade 流程：**
-1. relay 建立后，accessor 检查条件满足，创建 `frp_punch_engine` 并启动 endpoint probe（UDP `p2p_probe`，200ms 间隔 × 10 次）
-2. accessor 探得自身公网 `ip:port` 后，通过 signal channel 发送 `p2p_handshake`（含 external_ip、external_port、nat_type、rtt_ms）给 provider
-3. provider 收到后创建 `punch_engine`，启动自身 endpoint probe，完成后回复 `p2p_handshake_ack`
-4. accessor 根据时钟偏移计算同步 deadline，通过 `punch_start` 下发给 provider（以 server 时钟为基准）
-5. 双方在 deadline 时刻同时启动 UDP punch：sym 侧 65 socket × 5 重传，cone 侧 3000 target × 5 重传
-6. 收到匹配探测包 → punch engine 通过 signal channel 完成 `punch_confirm → punch_confirm_ack → punch_confirm_ok` 三次握手
-7. 打洞成功：KCP output 从 TCP relay 切换为 UDP（KCP 实例不重建，仅替换底层 output）
-8. TCP relay 被释放，数据继续通过 P2P UDP 传输，启用 keepalive（10s idle → 每 2s 发 1 字节探测）
+1. relay 建立后，accessor 检查 `public_server_udp_port != 0` 且 NAT 可穿透，创建 `frp_punch_engine` 并启动 endpoint probe（UDP `p2p_probe`）
+2. accessor 通过 signal channel 发送 `accessor_punch_start` 给 provider
+3. provider 收到后创建 `punch_engine`，启动自身 endpoint probe，完成后回复 `provider_p2p_handshake`
+4. accessor 回复 `accessor_handshake_ack`，双方各自 `start_punch_at` 开始同步 UDP punch
+5. 收到匹配探测包的一方通过 signal channel 发起 `punch_confirm → punch_confirm_ack → punch_confirm_ok` 握手
+6. 握手完成后双方 `accept_p2p`：KCP output 从 TCP relay 切换为 UDP（KCP 实例不重建，仅替换底层 output）
+7. TCP relay 被释放，数据继续通过 P2P UDP 传输；链路活性由 KCP keepalive 检测，业务空闲由 `data_channel_idle_timeout_seconds` 控制
 
 ---
 
